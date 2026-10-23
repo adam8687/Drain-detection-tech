@@ -9,7 +9,7 @@ const sensorId = { type: 'string', enum: ['a','b'] };
 const nullValue = { type: 'null' };
 const schemas = {
   RegisterDevice: object({ device_id: identifier, name: { type: 'string', minLength: 1, maxLength: 100 } }),
-  CalibrationInput: object({ empty_distance_mm: object({ a: millimeters, b: millimeters }), wet_threshold_mm: { type: 'number', minimum: 5, maximum: 1000, default: 20 }, dry_threshold_mm: { type: 'number', minimum: 0, maximum: 1000, default: 8 }, stable_samples: { type: 'integer', minimum: 2, maximum: 20, default: 3 }, max_gap_ms: { type: 'integer', minimum: 100, maximum: 60000, default: 5000 } }, ['empty_distance_mm']),
+  CalibrationInput: object({ source, empty_distance_mm: object({ a: millimeters, b: millimeters }), wet_threshold_mm: { type: 'number', minimum: 5, maximum: 1000, default: 20 }, dry_threshold_mm: { type: 'number', minimum: 0, maximum: 1000, default: 8 }, stable_samples: { type: 'integer', minimum: 2, maximum: 20, default: 3 }, max_gap_ms: { type: 'integer', minimum: 100, maximum: 60000, default: 5000 } }, ['empty_distance_mm']),
   SensorInput: { oneOf: [
     object({ sensor_id: sensorId, status: { const: 'ok' }, distance_mm: millimeters, echo_us: nullValue }, ['sensor_id','status','distance_mm']),
     object({ sensor_id: sensorId, status: { const: 'ok' }, echo_us: { type: 'number', minimum: 1, maximum: 40000 }, distance_mm: nullValue }, ['sensor_id','status','echo_us']),
@@ -34,10 +34,10 @@ const paths = {
   '/ready': { get: operation('Database readiness', undefined, { security: [] }) },
   '/api/v1/devices': { get: operation('List at most 100 devices'), post: operation('Register a device', undefined, { body: 'RegisterDevice', created: true }) },
   '/api/v1/devices/{id}': { get: operation('Latest frame, calibration and stale flag', undefined, { parameters: [id, sourceQuery] }) },
-  '/api/v1/devices/{id}/calibrations': { get: operation('Latest calibration', undefined, { parameters: [id] }), post: operation('Store an immutable empty-tub calibration', undefined, { body: 'CalibrationInput', parameters: [id], created: true }) },
+  '/api/v1/devices/{id}/calibrations': { get: operation('Latest calibration for a source (legacy manual baselines apply to either source)', undefined, { parameters: [id, sourceQuery] }), post: operation('Store an immutable empty-tub calibration', undefined, { body: 'CalibrationInput', parameters: [id], created: true }) },
   '/api/v1/readings': { post: operation('Ingest one two-sensor frame', object({ duplicate: { type: 'boolean' }, reading: ref('Frame') }), { body: 'FrameInput', created: true }) },
   '/api/v1/devices/{id}/readings': { get: operation('Bounded newest-first history', object({ readings: { type: 'array', items: ref('Frame') }, order: { const: 'newest_first' }, limit: { type: 'integer' } }), { parameters: [id,sourceQuery,{ name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 } },{ name: 'since', in: 'query', schema: time }] }) },
-  '/api/v1/devices/{id}/stream': { get: operation('Live SSE connected/reading events and heartbeat; no replay; both sources', undefined, { parameters: [id] }) },
+  '/api/v1/devices/{id}/stream': { get: operation('Live SSE connected/reading/snapshot events; source-filtered snapshots query storage every second; reconnect for latest snapshot', undefined, { parameters: [id, sourceQuery] }) },
   '/api/v1/devices/{id}/sessions': { get: operation('List at most 30 tests', undefined, { parameters: [id] }), post: operation('Start a calibrated drainage test', ref('Session'), { body: 'SessionInput', parameters: [id], created: true }) },
   '/api/v1/sessions/{id}': { get: operation('Read test and analysis', ref('Session'), { parameters: [{ ...id, schema: uuid }] }) },
   '/api/v1/sessions/{id}/finish': { post: operation('Close a test and freeze its result; safe to retry', ref('Session'), { parameters: [{ ...id, schema: uuid }] }) },

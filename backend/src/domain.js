@@ -55,3 +55,28 @@ export function analyzeSession(session, frames, calibration) {
     timing_basis: timingBasis,
   };
 }
+
+// Startup calibration assumes the fixture is empty. Stability alone cannot prove it.
+// Only persisted, consecutive samples from one source, boot and clock qualify.
+export function emptyFixtureBaseline(frames) {
+  if (frames.length < 5) return null;
+  const window = frames.slice(0, 5).reverse();
+  const first = window[0];
+  const samples = [];
+  for (let i = 0; i < window.length; i++) {
+    const frame = window[i], previous = window[i - 1];
+    if (frame.source !== first.source || frame.boot_id !== first.boot_id || frame.time_basis !== first.time_basis) return null;
+    if (previous && (frame.sequence !== previous.sequence + 1 || Date.parse(frame.measured_at) <= Date.parse(previous.measured_at) || Date.parse(frame.measured_at) - Date.parse(previous.measured_at) > 5000)) return null;
+    const values = distances(frame);
+    if (values.some(r => r.status !== 'ok' || !Number.isFinite(r.distance_mm))) return null;
+    samples.push(Object.fromEntries(values.map(r => [r.sensor_id, r.distance_mm])));
+  }
+  if (Date.parse(window.at(-1).measured_at) - Date.parse(first.measured_at) < 2000) return null;
+  const baseline = {};
+  for (const sensor of ['a', 'b']) {
+    const values = samples.map(sample => sample[sensor]).sort((a, b) => a - b);
+    if (values.at(-1) - values[0] > 4) return null;
+    baseline[sensor] = Math.round(values[2] * 10) / 10;
+  }
+  return baseline;
+}

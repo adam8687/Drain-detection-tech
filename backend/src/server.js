@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { configFromEnv } from './config.js';
 import { createStore } from './storage.js';
 import { ApiError, fail, object, source, text, timestamp, validateCalibration, validateDevice, validateFrame, deviceId } from './validation.js';
-import { levels, analyzeSession } from './domain.js';
+import { levels, analyzeSession, emptyFixtureBaseline } from './domain.js';
 
 const ROOT = new URL('../', import.meta.url);
 const MAX_BODY_BYTES = 16384;
@@ -33,6 +33,7 @@ function safeFrame(frame, calibration) {
 
 export function createApp(config, store = createStore(config)) {
   const listeners = new Map();
+  const streamStops = new Set();
   const now = () => new Date().toISOString();
   const json = (res, status, data) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -43,7 +44,28 @@ export function createApp(config, store = createStore(config)) {
     if (!value) throw new ApiError(404, 'device_not_found', 'Register this device first');
     return value;
   };
-  const calibration = async id => (await store.list('calibrations', { device_id: id }, 1))[0] ?? null;
+  const calibration = async (id, selectedSource) => {
+    // Legacy manual calibrations apply to either source; automatic ones never do.
+    const rows = await store.list('calibrations', { device_id: id }, 1000);
+    return rows.find(cal => !cal.source || cal.source === selectedSource) ?? null;
+  };
+  const automaticCalibration = async frame => {
+    const existing = await calibration(frame.device_id, frame.source);
+    if (existing || config.autoCalibrate === false) return existing;
+    const recent = await store.list('readings', { device_id: frame.device_id, source: frame.source }, 5, 'measured_at');
+    if (!recent.length || recent[0].boot_id !== frame.boot_id || frame.sequence !== recent[0].sequence + 1 ||
+        Date.parse(frame.captured_at || now()) - Date.parse(recent[0].measured_at) > 5000 ||
+        Date.parse(frame.captured_at || now()) <= Date.parse(recent[0].measured_at)) return null;
+    const baseline = emptyFixtureBaseline(recent);
+    if (!baseline) return null;
+    // Deterministic ID makes concurrent API replicas converge on the same baseline.
+    const hash = createHash('sha256').update(`auto:${frame.device_id}:${frame.source}:${recent[0].event_id}`).digest('hex');
+    const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+    const value = { ...validateCalibration({ empty_distance_mm: baseline }), id, device_id: frame.device_id,
+      created_at: now(), source: frame.source, method: 'automatic_empty_fixture', sample_event_ids: recent.map(r => r.event_id) };
+    try { return await store.insert('calibrations', value); }
+    catch (error) { if (error.status === 409) return await calibration(frame.device_id, frame.source); throw error; }
+  };
   const sessionView = async session => {
     // Completed reports are frozen: late buffered frames must not rewrite a demo result.
     if (session.status === 'finished' && session.analysis) return session;
@@ -102,12 +124,13 @@ export function createApp(config, store = createStore(config)) {
         const requestHash = createHash('sha256').update(JSON.stringify(frame)).digest('hex');
         await requireDevice(frame.device_id);
         const existing = await store.get('readings', frame.event_id);
-        const cal = await calibration(frame.device_id);
+
         if (existing) {
           if (existing.request_hash !== requestHash) throw new ApiError(409, 'event_conflict', 'event_id was already used with a different payload');
           const originalCal = existing.calibration_id ? await store.get('calibrations', existing.calibration_id) : null;
           return json(res, 200, { duplicate: true, reading: safeFrame(existing, originalCal) });
         }
+        const cal = await automaticCalibration(frame);
         const receivedAt = now();
         const record = { ...frame, received_at: receivedAt, measured_at: frame.captured_at || receivedAt, time_basis: frame.captured_at ? 'device_clock' : 'server_received', calibration_id: cal?.id ?? null, request_hash: requestHash };
         let savedRecord;
@@ -133,12 +156,12 @@ export function createApp(config, store = createStore(config)) {
         if (!resource && method === 'GET') {
           const selectedSource = source(url.searchParams.get('source') || 'hardware');
           const latest = (await store.list('readings', { device_id: id, source: selectedSource }, 1, 'measured_at'))[0];
-          const cal = await calibration(id);
+          const cal = await calibration(id, selectedSource);
           const frameCal = latest?.calibration_id ? await store.get('calibrations', latest.calibration_id) : null;
           return json(res, 200, { ...device, source: selectedSource, calibration: cal, latest: latest ? safeFrame(latest, frameCal) : null, stale: !latest || Date.now() - Date.parse(latest.received_at) > 15000 });
         }
         if (resource === 'calibrations') {
-          if (method === 'GET') return json(res, 200, { calibration: await calibration(id) });
+          if (method === 'GET') return json(res, 200, { calibration: await calibration(id, source(url.searchParams.get('source') || 'hardware')) });
           if (method === 'POST') return json(res, 201, await store.insert('calibrations', { ...validateCalibration(await body(req)), id: randomUUID(), device_id: id, created_at: now() }));
         }
         if (resource === 'readings' && method === 'GET') {
@@ -153,14 +176,45 @@ export function createApp(config, store = createStore(config)) {
           return json(res, 200, { readings: rows.map(f => safeFrame(f, calibrations.get(f.calibration_id))), order: 'newest_first', limit });
         }
         if (resource === 'stream' && method === 'GET') {
-          const total = [...listeners.values()].reduce((count, set) => count + set.size, 0);
-          if (total >= 100) throw new ApiError(429, 'stream_limit', 'Too many live dashboard connections');
+          if (streamStops.size >= 100) throw new ApiError(429, 'stream_limit', 'Too many live dashboard connections');
+          const selectedSource = source(url.searchParams.get('source') || 'hardware');
           res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
           res.write('event: connected\ndata: {}\n\n');
           if (!listeners.has(id)) listeners.set(id, new Set());
           listeners.get(id).add(res);
-          const timer = setInterval(() => res.write(': heartbeat\n\n'), 15000);
-          res.on('close', () => { clearInterval(timer); listeners.get(id)?.delete(res); if (!listeners.get(id)?.size) listeners.delete(id); });
+          let stopped = false, timer, fingerprint;
+          const stop = () => {
+            stopped = true; clearTimeout(timer); streamStops.delete(stop);
+            listeners.get(id)?.delete(res); if (!listeners.get(id)?.size) listeners.delete(id);
+            res.end();
+          };
+          streamStops.add(stop);
+          res.on('close', stop);
+          const poll = async () => {
+            try {
+              const [rows, tests, cal] = await Promise.all([
+                store.list('readings', { device_id: id, source: selectedSource }, 120, 'measured_at'),
+                store.list('sessions', { device_id: id, source: selectedSource }, 30, 'started_at'),
+                calibration(id, selectedSource),
+              ]);
+              const calibrations = new Map();
+              for (const frame of rows) if (frame.calibration_id && !calibrations.has(frame.calibration_id)) calibrations.set(frame.calibration_id, await store.get('calibrations', frame.calibration_id));
+              const readings = rows.map(frame => safeFrame(frame, calibrations.get(frame.calibration_id)));
+              const latest = readings[0] || null;
+              const snapshot = { device: { ...device, source: selectedSource, calibration: cal, latest,
+                stale: !latest || Date.now() - Date.parse(latest.received_at) > 15000 }, readings, tests };
+              const next = JSON.stringify(snapshot);
+              if (stopped) return;
+              if (res.writableLength > 65536) { stop(); return; }
+              if (next !== fingerprint) { res.write(`event: snapshot\ndata: ${next}\n\n`); fingerprint = next; }
+              else res.write(': heartbeat\n\n');
+            } catch {
+              if (!stopped) res.write('event: unavailable\ndata: {}\n\n');
+              stop(); return;
+            }
+            if (!stopped) timer = setTimeout(poll, 1000);
+          };
+          timer = setTimeout(poll, 0);
           return;
         }
         if (resource === 'sessions') {
@@ -170,7 +224,8 @@ export function createApp(config, store = createStore(config)) {
           }
           if (method === 'POST') {
             const value = object(await body(req), ['source', 'name']);
-            const cal = await calibration(id);
+            const selectedSource = source(value.source);
+            const cal = await calibration(id, selectedSource);
             if (!cal) throw new ApiError(409, 'calibration_required', 'Calibrate both sensors before starting a drainage test');
             return json(res, 201, await store.insert('sessions', { id: randomUUID(), device_id: id, source: source(value.source), name: text(value.name || 'Drainage test', 'name'), status: 'active', started_at: now(), finished_at: null, calibration_id: cal.id }));
           }
@@ -201,7 +256,7 @@ export function createApp(config, store = createStore(config)) {
   server.headersTimeout = 10000;
   server.maxHeadersCount = 64;
   return { server, store, close: async () => {
-    for (const group of listeners.values()) for (const res of group) res.end();
+    for (const stop of streamStops) stop();
     await new Promise(resolve => server.close(resolve));
     await store.close();
   } };

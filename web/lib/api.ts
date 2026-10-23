@@ -30,13 +30,14 @@ export interface Frame extends FrameInput {
   levels: Level[];
 }
 export interface CalibrationInput {
+  source?: Source;
   empty_distance_mm: { a: number; b: number };
   wet_threshold_mm?: number;
   dry_threshold_mm?: number;
   stable_samples?: number;
   max_gap_ms?: number;
 }
-export interface Calibration extends CalibrationInput { id: string; device_id: string; created_at: string }
+export interface Calibration extends CalibrationInput { id: string; device_id: string; created_at: string; source?: Source; method?: 'automatic_empty_fixture'; sample_event_ids?: string[] }
 export interface Device { device_id: string; name: string; created_at: string }
 export interface Analysis {
   outcome: 'completed' | 'incomplete' | 'inconclusive';
@@ -87,6 +88,37 @@ export class DrainApi {
     if (!response.ok) throw new DrainApiError(response.status, value.error?.code || 'request_failed', value.error?.message || 'Request failed', value.error?.request_id);
     return value as T;
   }
+  // Fetch streams support Authorization without putting tokens in URLs.
+  async stream(id: string, source: Source, signal: AbortSignal, onSnapshot: (snapshot: LiveSnapshot) => void) {
+    const response = await this.fetcher(`${this.baseUrl}/api/v1/devices/${encodeURIComponent(id)}/stream?source=${source}`, {
+      cache: 'no-store', signal, headers: { Accept: 'text/event-stream', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+    });
+    if (!response.ok) {
+      const value = await response.json();
+      throw new DrainApiError(response.status, value.error?.code || 'stream_failed', value.error?.message || 'Live connection failed');
+    }
+    if (!response.body) throw new Error('Live stream unavailable');
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error('Live connection closed');
+        buffer += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+          const message = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+          const lines = message.split('\n');
+          if (lines.includes('event: unavailable')) throw new Error('Live storage unavailable');
+          if (lines.includes('event: snapshot')) {
+            const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+            onSnapshot(JSON.parse(data) as LiveSnapshot);
+          }
+        }
+        if (buffer.length > 1048576) throw new Error('Live message exceeds limit');
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  }
   devices() { return this.request<{ devices: Device[] }>('/devices'); }
   register(device_id: string, name: string) { return this.request<Device>('/devices', 'POST', { device_id, name }); }
   device(id: string, source: Source = 'hardware') {
@@ -101,4 +133,10 @@ export class DrainApi {
   tests(id: string) { return this.request<{ sessions: DrainTest[] }>(`/devices/${encodeURIComponent(id)}/sessions`); }
   test(id: string) { return this.request<DrainTest>(`/sessions/${encodeURIComponent(id)}`); }
   finishTest(id: string) { return this.request<DrainTest>(`/sessions/${encodeURIComponent(id)}/finish`, 'POST'); }
+}
+
+export interface LiveSnapshot {
+  device: Device & { source: Source; calibration: Calibration | null; latest: Frame | null; stale: boolean };
+  readings: Frame[];
+  tests: DrainTest[];
 }

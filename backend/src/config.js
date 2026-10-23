@@ -3,6 +3,7 @@ export function configFromEnv(env = process.env) {
     host: env.HOST || '0.0.0.0', port: Number(env.PORT || 8000),
     production: env.NODE_ENV === 'production',
     storage: env.STORAGE_BACKEND || 'supabase',
+    autoCalibrate: env.AUTO_CALIBRATE !== 'false',
     sqlitePath: env.SQLITE_PATH || './data/drain-monitor.sqlite',
     apiKey: env.API_KEY || '',
     origins: (env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173').split(',').map(s => s.trim()).filter(Boolean),

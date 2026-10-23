@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/server.js';
 import { configFromEnv } from '../src/config.js';
+import { DrainApi } from '../../web/lib/api.ts';
 import { SupabaseStore } from '../src/storage.js';
 
 // A PostgREST protocol fixture, not the SQLite adapter. This exercises the actual
@@ -91,4 +92,37 @@ test('API persists through Supabase, sees other writers, and never acknowledges 
   database.setUnavailable(true);
   const offline = await api('/devices/cloud-tub?source=mock');
   assert.equal(offline.status, 503); assert.equal(offline.data.latest, undefined);
+});
+
+test('authenticated live snapshots see external Supabase writes, filter sources and report outages', { timeout: 12000 }, async t => {
+  const database = databaseFixture();
+  const config = configFromEnv({ SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SECRET_KEY: 'sb_secret_protocol_test', API_KEY: 'live-token' });
+  const store = new SupabaseStore(config.supabaseUrl, config.supabaseKey, database.fetcher);
+  const app = createApp(config, store);
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const controller = new AbortController();
+  t.after(async () => { controller.abort(); await app.close(); });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const api = new DrainApi(base, 'live-token');
+  await api.register('live-tub', 'Live tub');
+  await assert.rejects(() => new DrainApi(base).stream('live-tub', 'hardware', controller.signal, () => {}), e => e.status === 401);
+  let stage = 0;
+  const task = api.stream('live-tub', 'hardware', controller.signal, snapshot => {
+    if (stage === 0) {
+      assert.equal(snapshot.device.latest, null); stage = 1;
+      const frame = { event_id: randomUUID(), device_id: 'live-tub', boot_id: randomUUID(), sequence: 0, source: 'hardware',
+        measured_at: new Date().toISOString(), received_at: new Date().toISOString(), captured_at: null, time_basis: 'server_received', calibration_id: null,
+        readings: [{ sensor_id: 'a', status: 'ok', distance_mm: 400 }, { sensor_id: 'b', status: 'ok', distance_mm: 420 }] };
+      // Direct database insert bypasses the API process's publish function.
+      const row = value => ({ ...value, payload: value });
+      database.rows.get('readings').push(row(frame), row({ ...frame, event_id: randomUUID(), source: 'mock' }));
+    } else {
+      assert.equal(snapshot.readings.length, 1);
+      assert.equal(snapshot.device.latest.source, 'hardware');
+      assert.equal(snapshot.device.latest.request_hash, undefined);
+      stage = 2; database.setUnavailable(true);
+    }
+  });
+  await assert.rejects(() => task, /Live storage unavailable/);
+  assert.equal(stage, 2);
 });

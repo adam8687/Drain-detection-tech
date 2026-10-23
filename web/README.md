@@ -1,29 +1,36 @@
-# Default Next.js frontend
+# Next.js frontend
 
-This uses the official create-next-app App Router TypeScript/CSS starter page, layout, styles and SVG assets. Source: vercel/next.js, packages/create-next-app/templates/app/ts. Template license: TEMPLATE-LICENSE.txt. There is no custom sensor dashboard, polling or API-token input on the home page.
+The home route redirects to `/insights`. The insights page focuses on graphs and essential controls, with sensor details collapsed. Existing layout styles and assets remain in place.
 
-## Run
-
-Use Node.js 24+. From the repository root:
+Use Node.js 24+, retain existing environment files, and run:
 
 ```sh
-cd web
-npm install next@latest react@latest react-dom@latest
-npm install --save-dev typescript @types/node @types/react @types/react-dom
-npm --prefix .. run setup
+npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. Next.js generates TypeScript configuration on first startup. Retain package-lock.json; later installs use npm ci. The stock layout uses next/font/google and needs font-download access. Installation, compilation and browser rendering were unavailable in the build environment and remain to be verified on your machine.
+Open http://localhost:3000 with the backend running. `NEXT_PUBLIC_BACKEND_URL` points to the backend; its CORS origins must permit this frontend. A configured backend API token can be entered in the existing form and stays in memory. Supabase secrets belong exclusively in `backend/.env`.
 
-## Later integration
+The typed client uses authenticated fetch streams, with tokens in headers, to receive source-filtered snapshots. The backend queries Supabase every second for open streams, including external writers. Reconnect restores the current snapshot; REST recovery and device discovery run every 15 seconds. Streams, retries and pending responses are canceled when device, source or token changes or the component unmounts.
 
-The backend requires Supabase. Apply the SQL migration, configure backend/.env, run npm run check:supabase and npm run verify:supabase, then npm start from the repository root. Its separate testing console is http://localhost:8000. The default Next.js page intentionally makes no API requests.
+Keep the fixture empty at startup for automatic calibration. Five stable consecutive samples spanning at least two seconds establish an empty baseline; the next sample uses it. The UI indicates when calibration is pending or saved. Stability cannot distinguish an empty fixture from still water. See the root README for calibration bounds and manual override behavior.
 
-web/lib/api.ts retains the corrected DrainApi client for the design team. Requests disable caching, and the backend queries Supabase on each read. Use periodic fresh reads or SSE plus REST recovery when adding the live dashboard. SSE is process-local; polling is necessary to discover writes made outside the current API process. The stock Next.js page does not claim to display live data.
+Run `npm run typecheck` and `npm run build` locally. The existing Google fonts need network access for the production build.
 
-NEXT_PUBLIC_BACKEND_URL in web/.env.local should point to the backend. For another computer, use the backend's LAN/HTTPS URL and allow the frontend origin in backend CORS_ORIGINS. Never expose Supabase secrets or a backend token through NEXT_PUBLIC variables. Keep the prototype backend token in memory when the future UI supplies it.
+The optional `/api/events` proxy forwards JSON and caller Authorization to the backend. `BACKEND_URL` configures its server-side target; no credentials are injected. The drain-detail route remains a placeholder.
 
-The optional app/api/events/route.ts proxy forwards caller JSON and Authorization to backend /api/v1/readings; it does not inject privileged credentials. BACKEND_URL configures this Next.js server-side proxy. ESP32/mock producers may call the backend directly.
+## Graph template
 
-The drain-detail route remains a minimal placeholder. Use the separate backend console for calibration, raw readings and drainage-test inspection until the design team implements the dashboard.
+Visit `/insights` for a self-contained synthetic preview with scenario selection, a playback slider, stale-data simulation, distance/depth graphs, experimental short-term forecasts and test-duration bars. Choose Live Supabase data to use the existing authenticated backend stream. Preview data is clearly labeled and is never persisted. The same graph component is available on the home page. Graph styles are scoped to new components; original starter CSS is unchanged.
+
+The live controls can collect a confirmed-empty baseline and start/finish controlled drainage tests. Calibration learns per-sensor median distances from at least 20 stable samples spanning eight seconds, estimates sample noise, and saves source-specific references. It times out after 30 seconds without qualifying evidence. It does not infer sink dimensions. The prior automatic startup calibration remains separately supported.
+
+The graphs keep both sensors separate and show missing echoes as gaps. Forecasts are experimental local extrapolations, use the slower sensor, and are suppressed for stale, interrupted, noisy, flat or rising data. Existing completed sessions use the backend's frozen analysis. Historical test durations are descriptive and require comparable starting water levels and tap-off conditions; they are not a validated maintenance forecast. See the root README for model assumptions.
+
+The primary graph now plots estimated seconds remaining against elapsed time. Solid segments show estimates computed only from readings available at each point; dashed segments show a projected countdown. Unknown estimates leave gaps. Actual completed test durations are labeled in seconds. Depth and distance plots are collapsed under Sensor measurements and calibration details.
+
+## Supabase practice view
+
+`/insights` now defaults to Supabase practice data. Run `npm run seed:practice` from the repository root once, keep the backend running, and select any of the six saved mock tests. The page reads 280 persisted frames through `/api/backend/api/v1/devices/...`, then plots the selected test from those responses. The replay slider does not generate new frames. Refresh explicitly with Read Supabase again; errors never trigger a synthetic-data fallback.
+
+The same-origin gateway uses server-side `BACKEND_URL`, forwards optional caller Authorization, disables caching and allows only GET device/history/session routes. Supabase server credentials remain in the backend. Use Live Supabase data for the separate device stream, or Local synthetic preview for offline examples.

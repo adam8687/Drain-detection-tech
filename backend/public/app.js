@@ -45,7 +45,7 @@ async function refresh() {
 $('connection').addEventListener('submit', action(async () => { stopStream(); base = ($('base').value || location.origin).replace(/\/$/, ''); token = $('token').value; await listDevices(); }));
 $('register').addEventListener('submit', action(async event => {
   const data = Object.fromEntries(new FormData(event.target));
-  await api('/devices', 'POST', data); await listDevices(data.device_id); notice('Device registered. Save an empty-tub calibration next.');
+  await api('/devices', 'POST', data); await listDevices(data.device_id); notice('Device registered. Keep the fixture empty for automatic calibration, or save a manual baseline.');
 }));
 $('calibrate').addEventListener('submit', action(async event => {
   const data = new FormData(event.target);
@@ -77,7 +77,7 @@ $('stream').onclick = action(async () => {
   if (streamAbort) { stopStream(); notice('Live stream stopped.'); return; }
   const controller = new AbortController(); streamAbort = controller;
   try {
-    const response = await fetch(`${base}/api/v1/devices/${device()}/stream`, { headers: headers(), signal: controller.signal });
+    const response = await fetch(`${base}/api/v1/devices/${device()}/stream?source=${$('source').value}`, { headers: headers(), signal: controller.signal });
     if (!response.ok) throw Error(`Stream failed: HTTP ${response.status}`);
     $('stream').textContent = 'Stop live stream'; notice('Live stream connected. History is available through Refresh readings.');
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader(); let buffer = '';
@@ -87,6 +87,7 @@ $('stream').onclick = action(async () => {
       while ((boundary = buffer.indexOf('\n\n')) !== -1) {
         const entry = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
         const line = entry.split('\n').find(s => s.startsWith('data: '));
+        if (entry.startsWith('event: snapshot') && line) { const snapshot = JSON.parse(line.slice(6)); if (snapshot.device.latest) showFrame(snapshot.device.latest); $('history').textContent = JSON.stringify(snapshot.readings, null, 2); }
         if (entry.startsWith('event: reading') && line) { const frame = JSON.parse(line.slice(6)); if (frame.source === $('source').value) showFrame(frame); }
       }
     }

@@ -37,9 +37,10 @@ export function validateDevice(body) {
   return { device_id: deviceId(body.device_id), name: text(body.name, 'name') };
 }
 export function validateCalibration(body) {
-  object(body, ['empty_distance_mm', 'wet_threshold_mm', 'dry_threshold_mm', 'stable_samples', 'max_gap_ms']);
+  object(body, ['source', 'empty_distance_mm', 'wet_threshold_mm', 'dry_threshold_mm', 'stable_samples', 'max_gap_ms']);
   object(body.empty_distance_mm, ['a', 'b']);
   const result = {
+    ...(body.source === undefined ? {} : { source: source(body.source) }),
     empty_distance_mm: { a: number(body.empty_distance_mm.a, 'empty_distance_mm.a', 20, 4500), b: number(body.empty_distance_mm.b, 'empty_distance_mm.b', 20, 4500) },
     wet_threshold_mm: number(body.wet_threshold_mm ?? 20, 'wet_threshold_mm', 5, 1000),
     dry_threshold_mm: number(body.dry_threshold_mm ?? 8, 'dry_threshold_mm', 0, 1000),

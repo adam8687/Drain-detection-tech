@@ -586,7 +586,7 @@
     },
     "/api/v1/devices/{id}/calibrations": {
       "get": {
-        "summary": "Latest calibration",
+        "summary": "Latest calibration for a source (legacy manual baselines apply to either source)",
         "parameters": [
           {
             "name": "id",
@@ -595,6 +595,18 @@
             "schema": {
               "type": "string",
               "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mock",
+                "hardware"
+              ],
+              "default": "hardware"
             }
           }
         ],
@@ -1151,7 +1163,7 @@
     },
     "/api/v1/devices/{id}/stream": {
       "get": {
-        "summary": "Live SSE connected/reading events and heartbeat; no replay; both sources",
+        "summary": "Live SSE connected/reading/snapshot events; source-filtered snapshots query storage every second; reconnect for latest snapshot",
         "parameters": [
           {
             "name": "id",
@@ -1160,6 +1172,18 @@
             "schema": {
               "type": "string",
               "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mock",
+                "hardware"
+              ],
+              "default": "hardware"
             }
           }
         ],
@@ -1780,6 +1804,13 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "mock",
+              "hardware"
+            ]
+          },
           "empty_distance_mm": {
             "type": "object",
             "additionalProperties": false,

@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { DrainApi, DrainApiError } from '../lib/api';
 import type { Device, Source } from '../lib/api';
 import { loadReadings } from '../lib/readings';
+import DrainageGraphs from './drainage-graphs';
+import CalibrationControl from './calibration-control';
+import DrainageTestControl from './drainage-test-control';
 
 const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 type Readings = Awaited<ReturnType<typeof loadReadings>>;
@@ -43,10 +46,33 @@ export default function BackendData() {
         setError(err instanceof DrainApiError ? err.message : `Cannot reach the backend at ${baseUrl}. Check that it is running and permits this frontend origin.`);
         setLoaded(true);
       }
-      if (!stopped) timer = setTimeout(poll, 2000);
+      if (!stopped) timer = setTimeout(poll, 15000);
     }
     void poll();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }, [deviceId, source, token, refresh]);
+
+  useEffect(() => {
+    if (!deviceId) return;
+    const controller = new AbortController();
+    const api = new DrainApi(baseUrl, token);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function connect() {
+      try {
+        await api.stream(deviceId, source, controller.signal, snapshot => {
+          if (controller.signal.aborted) return;
+          setData(snapshot); setUpdatedAt(new Date().toISOString());
+          setError(''); setNeedsToken(false); setLoaded(true);
+        });
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setNeedsToken(err instanceof DrainApiError && err.status === 401);
+        setError(err instanceof DrainApiError ? err.message : 'Live connection interrupted. Reconnecting automatically.');
+      }
+      if (!controller.signal.aborted) timer = setTimeout(connect, 2000);
+    }
+    void connect();
+    return () => { controller.abort(); if (timer) clearTimeout(timer); };
   }, [deviceId, source, token, refresh]);
 
   return <section aria-label="Backend data">
@@ -72,6 +98,11 @@ export default function BackendData() {
     {loaded && !error && data && <>
       <p>{updatedAt && <>Last fetched: <time dateTime={updatedAt}>{new Date(updatedAt).toLocaleTimeString()}</time>. </>}
         {data.device.stale ? 'No recent sensor frames; showing stored readings.' : 'Recent sensor frames received.'}</p>
+      <p>{data.device.calibration
+        ? data.device.calibration.method === 'automatic_empty_fixture' ? 'Empty-fixture baseline calibrated automatically.' : 'Manual empty-fixture baseline active.'
+        : 'Waiting for stable empty-fixture readings. Keep the fixture empty during startup calibration.'}</p>
+      <CalibrationControl key={`${deviceId}:${source}:${token}`} api={new DrainApi(baseUrl, token)} deviceId={deviceId} source={source} readings={data.readings} onSaved={calibration => setData(current => current ? { ...current, device: { ...current.device, calibration } } : current)} />
+      <DrainageGraphs frames={data.readings} calibration={data.device.calibration} tests={data.tests} stale={data.device.stale} />
       <h3>Latest sensor readings</h3>
       {data.device.latest ? <>
         <p>Source: {data.device.latest.source}. Measured: <time dateTime={data.device.latest.measured_at}>{data.device.latest.measured_at}</time>.</p>
@@ -85,6 +116,7 @@ export default function BackendData() {
           </tr>)}</tbody>
         </table>
       </> : <p>No {source} readings for this device.</p>}
+      <DrainageTestControl key={`test:${deviceId}:${source}:${token}`} api={new DrainApi(baseUrl, token)} deviceId={deviceId} source={source} tests={data.tests} calibrated={Boolean(data.device.calibration)} />
       <h3>Drainage tests</h3>
       {data.tests.length ? <ul>{data.tests.slice(0, 5).map(test => <li key={test.id}>
         {test.name}: {test.analysis?.outcome || test.status}

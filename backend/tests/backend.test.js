@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { createApp } from '../src/server.js';
 import { configFromEnv } from '../src/config.js';
 import { SQLiteStore, SupabaseStore } from '../src/storage.js';
-import { analyzeSession, distances } from '../src/domain.js';
+import { analyzeSession, distances, emptyFixtureBaseline } from '../src/domain.js';
 import { validateFrame } from '../src/validation.js';
 
 const config = overrides => ({ ...configFromEnv({ STORAGE_BACKEND: 'sqlite', SQLITE_PATH: ':memory:' }), ...overrides });
@@ -19,7 +19,7 @@ function frame(depth = 100, time = '2026-10-22T00:00:01.000Z', sequence = 0) {
   return { event_id: randomUUID(), device_id: 'tub-01', boot_id: '20000000-0000-4000-8000-000000000001', sequence, source: 'mock', captured_at: time, measured_at: time, time_basis: 'device_clock', temperature_c: 20,
     readings: [{ sensor_id: 'a', status: 'ok', distance_mm: 400 - depth }, { sensor_id: 'b', status: 'ok', distance_mm: 420 - depth }] };
 }
-function input(value) { const { measured_at, time_basis, ...raw } = value; return raw; }
+function input(value) { const { measured_at, time_basis, received_at, ...raw } = value; return raw; }
 async function fixture(t, overrides = {}, suppliedStore) {
   const app = createApp(config(overrides), suppliedStore);
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -159,7 +159,8 @@ test('SSE delivers new readings; disconnected clients are cleaned up', async t =
   const reader = response.body.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /event: connected/);
   await api('/api/v1/readings', 'POST', input(frame()));
-  const event = new TextDecoder().decode((await reader.read()).value);
+  let event = '';
+  while (!event.includes('event: reading')) event += new TextDecoder().decode((await reader.read()).value);
   assert.match(event, /event: reading/); assert.match(event, /"depth_mm":100/);
   controller.abort(); await reader.cancel().catch(() => {});
 });
@@ -202,4 +203,74 @@ test('starting a second backend reports an occupied port without an unhandled cr
     cwd: new URL('../', import.meta.url), timeout: 5000,
     env: { ...process.env, NODE_ENV: 'test', STORAGE_BACKEND: 'sqlite', SQLITE_PATH: ':memory:', HOST: '127.0.0.1', PORT: String(app.server.address().port) },
   }), error => error.code === 1 && error.stderr.includes('already in use') && !error.stderr.includes('Unhandled'));
+});
+
+function emptyFrames() {
+  return Array.from({ length: 5 }, (_, i) => ({ ...frame(0, `2026-10-22T00:00:0${i + 1}Z`, i), received_at: `2026-10-22T00:00:0${i + 1}Z` })).reverse();
+}
+test('automatic baseline rejects noise, invalid echoes, gaps, reboots, clocks and repeated samples', () => {
+  const frames = emptyFrames();
+  assert.deepEqual(emptyFixtureBaseline(frames), { a: 400, b: 420 });
+  assert.equal(emptyFixtureBaseline(frames.slice(0, 4)), null);
+  for (const mutate of [
+    f => { f[2].readings[0].status = 'timeout'; },
+    f => { f[2].readings[1].distance_mm = 430; },
+    f => { f[2].boot_id = randomUUID(); },
+    f => { f[2].source = 'hardware'; },
+    f => { f[2].time_basis = 'server_received'; },
+    f => { f[2].sequence = 20; },
+    f => { f[2].measured_at = f[1].measured_at; },
+    f => { f[0].measured_at = '2026-10-22T00:00:30Z'; },
+  ]) {
+    const changed = structuredClone(frames); mutate(changed);
+    assert.equal(emptyFixtureBaseline(changed), null);
+  }
+  const fast = frames.map(f => ({ ...f, measured_at: new Date(Date.parse('2026-10-22T00:00:00Z') + f.sequence * 10).toISOString() }));
+  assert.equal(emptyFixtureBaseline(fast), null);
+});
+test('automatic calibration uses persisted empty samples, survives app restart, and isolates sources', async t => {
+  const { api, app } = await fixture(t);
+  await api('/api/v1/devices', 'POST', { device_id: 'tub-01', name: 'Auto tub' });
+  const frames = emptyFrames().reverse();
+  for (const f of frames) assert.equal((await api('/api/v1/readings', 'POST', input(f))).data.reading.calibration_id, null);
+  const next = input(frame(10, '2026-10-22T00:00:06Z', 5));
+  const accepted = await api('/api/v1/readings', 'POST', next);
+  assert.equal(accepted.status, 201);
+  assert.equal(accepted.data.reading.levels[0].depth_mm, 10);
+  const baseline = (await api('/api/v1/devices/tub-01?source=mock')).data.calibration;
+  assert.equal(baseline.method, 'automatic_empty_fixture');
+  assert.equal(baseline.sample_event_ids.length, 5);
+  assert.deepEqual(baseline.empty_distance_mm, { a: 400, b: 420 });
+  assert.equal((await api('/api/v1/devices/tub-01?source=hardware')).data.calibration, null);
+  assert.equal((await api('/api/v1/devices/tub-01/sessions', 'POST', { source: 'hardware' })).status, 409);
+  const duplicate = await api('/api/v1/readings', 'POST', next);
+  assert.deepEqual(duplicate.data.reading, accepted.data.reading);
+  assert.equal((await app.store.list('calibrations', { device_id: 'tub-01' })).length, 1);
+  // A new app has no in-memory calibration state to restore.
+  const restarted = createApp(config(), app.store);
+  await new Promise(resolve => restarted.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => restarted.server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${restarted.server.address().port}/api/v1/devices/tub-01?source=mock`);
+  assert.equal((await response.json()).calibration.id, baseline.id);
+});
+test('automatic calibration can be disabled and never replaces an existing manual calibration', async t => {
+  const { api, app } = await fixture(t, { autoCalibrate: false });
+  await api('/api/v1/devices', 'POST', { device_id: 'tub-01', name: 'Manual tub' });
+  for (const f of emptyFrames().reverse()) await api('/api/v1/readings', 'POST', input(f));
+  const next = input(frame(0, '2026-10-22T00:00:06Z', 5));
+  assert.equal((await api('/api/v1/readings', 'POST', next)).data.reading.calibration_id, null);
+  assert.equal((await app.store.list('calibrations')).length, 0);
+  await api('/api/v1/devices/tub-01/calibrations', 'POST', { empty_distance_mm: { a: 440, b: 460 } });
+  const reading = await api('/api/v1/readings', 'POST', input(frame(0, '2026-10-22T00:00:07Z', 6)));
+  assert.equal(reading.data.reading.levels[0].depth_mm, 40);
+});
+
+test('guided calibration writes source-specific baselines without changing legacy requests', async t => {
+  const { api } = await fixture(t, { autoCalibrate: false });
+  await api('/api/v1/devices', 'POST', { device_id: 'tub-01', name: 'Guided calibration' });
+  const saved = await api('/api/v1/devices/tub-01/calibrations', 'POST', { source: 'mock', empty_distance_mm: { a: 400, b: 420 } });
+  assert.equal(saved.status, 201);
+  assert.equal((await api('/api/v1/devices/tub-01?source=mock')).data.calibration.source, 'mock');
+  assert.equal((await api('/api/v1/devices/tub-01?source=hardware')).data.calibration, null);
+  assert.equal((await api('/api/v1/devices/tub-01/calibrations', 'POST', { source: 'wrong', empty_distance_mm: { a: 400, b: 420 } })).status, 422);
 });
