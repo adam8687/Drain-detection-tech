@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Drain monitor API</title><link rel="stylesheet" href="/styles.css"></head><body><main>
+<h1>Drain monitor API v1</h1><p><a href="/">Integration console</a> · <a href="/openapi.json">Download OpenAPI 3.1 contract</a></p>
+<p>Base path: <code>/api/v1</code>. JSON bodies use <code>Content-Type: application/json</code>. If API_KEY is configured, every API call requires <code>Authorization: Bearer &lt;API_KEY&gt;</code>.</p>
+<table><thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead><tbody>
+<tr><td>GET / POST</td><td>/devices</td><td>List / register devices</td></tr>
+<tr><td>GET</td><td>/devices/{id}?source=hardware</td><td>Latest state, calibration, stale flag</td></tr>
+<tr><td>GET / POST</td><td>/devices/{id}/calibrations</td><td>Latest / create immutable calibration</td></tr>
+<tr><td>POST</td><td>/readings</td><td>Accept one two-sensor frame; safe retries using event_id</td></tr>
+<tr><td>GET</td><td>/devices/{id}/readings?source=hardware&amp;limit=100</td><td>Recent frames, newest first; optional ISO since parameter</td></tr>
+<tr><td>GET</td><td>/devices/{id}/stream</td><td>Live SSE: connected and reading events, heartbeat every 15 seconds</td></tr>
+<tr><td>GET / POST</td><td>/devices/{id}/sessions</td><td>List / start explicit drainage tests</td></tr>
+<tr><td>GET</td><td>/sessions/{id}</td><td>Test analysis</td></tr>
+<tr><td>POST</td><td>/sessions/{id}/finish</td><td>Finish and store test result</td></tr>
+</tbody></table>
+<h2>Sensor frame</h2><pre>{
+  "event_id": "10000000-0000-4000-8000-000000000001",
+  "device_id": "tub-01",
+  "boot_id": "20000000-0000-4000-8000-000000000001",
+  "sequence": 0,
+  "captured_at": null,
+  "source": "hardware",
+  "temperature_c": 20,
+  "readings": [
+    {"sensor_id": "a", "status": "ok", "distance_mm": 300},
+    {"sensor_id": "b", "status": "timeout"}
+  ]
+}</pre>
+<p>Each frame must contain sensors a and b once each. For an ok reading, send distance_mm OR echo_us. For timeout/out_of_range, omit both. US-100 UART distances are already in millimeters; do not convert them as pulse times. Omit captured_at or send null before the ESP32 clock is synchronized; timing then uses server receipt and includes network delay.</p>
+<h2>Calibration and test</h2><pre>POST /devices/tub-01/calibrations
+{"empty_distance_mm":{"a":400,"b":420},"wet_threshold_mm":20,"dry_threshold_mm":8,"stable_samples":3,"max_gap_ms":5000}
+
+POST /devices/tub-01/sessions
+{"source":"hardware","name":"Filled-tub drainage test"}</pre>
+<p>Both sensors must first observe water above their individual wet thresholds, followed by consecutive valid readings below both dry thresholds. A failed echo is unknown, never dry. Large gaps make the result inconclusive. No claims of clog detection, corrosion detection, flow rate or validated thresholds are made.</p>
+<p>Limits: body 16KB, history limit 1–500, session analysis at most 5000 frames, one active test per device/source. Use filled-tub tests, not shallow shower runoff, for the initial hardware validation.</p>
+<p>Errors use <code>{"error":{"code":"...","message":"...","request_id":"..."}}</code>. 201 means new data, 200 means accepted retry/read, 409 means conflict, 422 means invalid payload, 503 means storage unavailable.</p>
+</main></body></html>

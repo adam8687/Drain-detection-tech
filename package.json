@@ -1,0 +1,16 @@
+{
+  "name": "drain-detection-tech",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "setup": "node backend/scripts/setup-env.js",
+    "start": "npm --prefix backend start",
+    "dev": "npm --prefix backend run dev",
+    "test": "npm --prefix backend test",
+    "check": "npm --prefix backend run check",
+    "simulate": "npm --prefix backend run simulate --",
+    "check:supabase": "npm --prefix backend run check:supabase",
+    "verify:supabase": "npm --prefix backend run verify:supabase"
+  }
+}

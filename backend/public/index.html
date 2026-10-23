@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Drain monitor integration console</title><link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script></head>
+<body>
+<main>
+  <h1>Drain monitor integration console</h1>
+  <p>Plain testing interface for the backend. <a href="/docs">API guide</a> · <a href="/openapi.json">OpenAPI contract</a></p>
+  <form id="connection">
+    <fieldset><legend>Connection</legend>
+      <label>Backend URL <input id="base" type="url" placeholder="Same server by default"></label>
+      <label>Backend API token <input id="token" type="password" autocomplete="off" placeholder="Only when API_KEY is configured"></label>
+      <button>Connect / refresh devices</button>
+    </fieldset>
+  </form>
+  <p id="notice" role="status">Connect to begin. API token stays in memory and is never saved to browser storage.</p>
+  <fieldset><legend>Device and data source</legend><select id="devices" aria-label="Device"><option value="">Select a device</option></select>
+    <select id="source" aria-label="Data source"><option value="mock">Mock</option><option value="hardware">Hardware</option></select>
+    <button id="refresh">Refresh readings</button><button id="stream">Start live stream</button>
+  </fieldset>
+  <section><h2>Latest readings</h2><p id="state">No readings loaded.</p>
+    <table><thead><tr><th>Sensor</th><th>Distance (mm)</th><th>Local depth (mm)</th><th>Quality</th></tr></thead><tbody id="levels"></tbody></table>
+    <p>Depth is calculated separately from each sensor's empty-tub baseline. These readings are not averaged.</p>
+  </section>
+  <form id="register"><fieldset><legend>Register a device</legend><label>Device ID <input name="device_id" required pattern="[A-Za-z0-9_-]{1,64}" value="demo-tub"></label><label>Name <input name="name" required value="Development bathtub"></label><button>Register</button></fieldset></form>
+  <form id="calibrate"><fieldset><legend>Empty-tub calibration</legend><p>Measure distance from each sensor to the dry tub floor directly below it. Values below are examples; replace for real hardware.</p><label>Sensor A (mm) <input name="a" type="number" min="20" max="4500" value="400" required></label><label>Sensor B (mm) <input name="b" type="number" min="20" max="4500" value="420" required></label><button>Save calibration</button></fieldset></form>
+  <fieldset><legend>Drainage test</legend><p>Start when the filled tub is ready to drain. Both sensors must observe water before a valid completion is possible.</p><button id="start">Start test</button><button id="finish">Finish test</button><button id="sessions">Refresh tests</button><pre id="session">No test selected.</pre></fieldset>
+  <form id="send"><fieldset><legend>Send a mock frame</legend><p>Creates new event/boot IDs automatically. Use the simulator for a complete drainage sequence.</p><label>Sensor A distance (mm) <input name="a" type="number" min="20" max="4500" value="300" required></label><label>Sensor B distance (mm) <input name="b" type="number" min="20" max="4500" value="320" required></label><label><input name="timeout" type="checkbox"> Sensor B has no echo</label><button>Send mock frame</button></fieldset></form>
+  <h2>Recent frames</h2><pre id="history">[]</pre>
+</main>
+</body></html>

@@ -1,0 +1,14 @@
+# Node, Python, and environment files are intentionally ignored.
+node_modules/
+.next/
+out/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+data/
+.venv/
+coverage/
+*.log
+.DS_Store

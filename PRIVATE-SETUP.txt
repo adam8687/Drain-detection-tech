@@ -1,0 +1,16 @@
+PRIVATE PACKAGE: backend/.env includes your supplied Supabase credentials.
+Keep this ZIP private. Do not publish or upload it to GitHub.
+The .gitignore excludes backend/.env and web/.env.local.
+
+From the extracted Drain-detection-tech folder, run npm start.
+Do not copy .env.example over the configured .env.
+Stop any older backend using port 8000 before starting this copy.
+If database tables have not been created, apply the included SQL migration once
+in the Supabase SQL Editor. API keys cannot create the database schema.
+The environment is preconfigured; live cloud access has not been verified.
+
+Frontend (default Next.js starter):
+cd web
+npm install next@latest react@latest react-dom@latest
+npm install --save-dev typescript @types/node @types/react @types/react-dom
+npm run dev
