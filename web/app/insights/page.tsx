@@ -4,6 +4,7 @@ import { useState } from 'react';
 import DrainageGraphs from '../drainage-graphs';
 import BackendData from '../backend-data';
 import SupabasePractice from '../supabase-practice';
+import AccountPanel from '../account-panel';
 import { demoCalibration, demoFrames, demoTests } from '../../lib/demo';
 import type { Scenario } from '../../lib/demo';
 import styles from './insights.module.css';
@@ -16,6 +17,7 @@ export default function InsightsPage() {
   const frames = demoFrames(scenario).slice(0, sample + 1);
   return <main className={styles.shell}>
     <h1>Drainage insights</h1>
+    <AccountPanel />
     <div className={styles.controls}>
       <label>Data <select value={mode} onChange={e => setMode(e.target.value)}><option value="practice">Supabase practice data</option><option value="preview">Local synthetic preview</option><option value="live">Live Supabase data</option></select></label>
       {mode === 'preview' && <>

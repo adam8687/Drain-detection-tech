@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { DrainApi, DrainApiError } from '../lib/api';
 import type { Device, Source } from '../lib/api';
 import { loadReadings } from '../lib/readings';
+import { useSession } from '../lib/supabase';
 import DrainageGraphs from './drainage-graphs';
 import CalibrationControl from './calibration-control';
 import DrainageTestControl from './drainage-test-control';
@@ -19,7 +20,8 @@ export default function BackendData() {
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [token, setToken] = useState('');
+  const [manualToken, setToken] = useState('');
+  const token = useSession()?.access_token || manualToken;
   const [draftToken, setDraftToken] = useState('');
   const [needsToken, setNeedsToken] = useState(false);
   const [refresh, setRefresh] = useState(0);

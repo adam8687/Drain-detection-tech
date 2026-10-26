@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { DrainApi, DrainApiError } from '../lib/api';
 import type { Calibration, DrainTest, Frame } from '../lib/api';
 import DrainageGraphs from './drainage-graphs';
+import { useSession } from '../lib/supabase';
 import styles from './insights/insights.module.css';
 
 const deviceId = 'graph-practice-sink-v1';
@@ -15,7 +16,8 @@ export default function SupabasePractice() {
   const [error, setError] = useState('');
   const [fetchedAt, setFetchedAt] = useState('');
   const [refresh, setRefresh] = useState(0);
-  const [token, setToken] = useState('');
+  const [manualToken, setToken] = useState('');
+  const token = useSession()?.access_token || manualToken;
   const [draftToken, setDraftToken] = useState('');
   const [needsToken, setNeedsToken] = useState(false);
   useEffect(() => {

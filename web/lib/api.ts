@@ -121,6 +121,7 @@ export class DrainApi {
   }
   devices() { return this.request<{ devices: Device[] }>('/devices'); }
   register(device_id: string, name: string) { return this.request<Device>('/devices', 'POST', { device_id, name }); }
+  createDeviceKey(id: string) { return this.request<{ device_id: string; key: string; prefix: string; created_at: string }>(`/devices/${encodeURIComponent(id)}/keys`, 'POST', {}); }
   device(id: string, source: Source = 'hardware') {
     return this.request<Device & { source: Source; calibration: Calibration | null; latest: Frame | null; stale: boolean }>(`/devices/${encodeURIComponent(id)}?source=${source}`);
   }
