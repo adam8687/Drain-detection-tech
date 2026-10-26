@@ -6,6 +6,7 @@ import { configFromEnv } from './config.js';
 import { createStore } from './storage.js';
 import { ApiError, fail, object, source, text, timestamp, validateCalibration, validateDevice, validateFrame, deviceId } from './validation.js';
 import { levels, analyzeSession, emptyFixtureBaseline } from './domain.js';
+import { DEVICE_KEY_PREFIX, hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 
 const ROOT = new URL('../', import.meta.url);
 const MAX_BODY_BYTES = 16384;
@@ -31,13 +32,42 @@ function safeFrame(frame, calibration) {
   return { ...visible, levels: levels(frame, calibration) };
 }
 
-export function createApp(config, store = createStore(config)) {
+export function createApp(config, store = createStore(config), {
+  verifyUser = config.storage === 'supabase' ? supabaseUserVerifier(config.supabaseUrl, config.supabaseKey) : async () => null,
+} = {}) {
   const listeners = new Map();
   const streamStops = new Set();
   const now = () => new Date().toISOString();
   const json = (res, status, data) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(data));
+  };
+  const unauthorized = () => new ApiError(401, 'unauthorized', 'Sign in, or send Authorization: Bearer <API_KEY or device key>');
+  // Without API_KEY, unauthenticated callers keep full access for local prototyping.
+  const authenticate = async req => {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (!token) { if (config.apiKey) throw unauthorized(); return { admin: true }; }
+    if (config.apiKey && equalToken(token, config.apiKey)) return { admin: true };
+    if (token.startsWith(DEVICE_KEY_PREFIX)) {
+      const key = await store.get('device_keys', hashDeviceKey(token));
+      if (!key || key.revoked_at) throw unauthorized();
+      return { deviceId: key.device_id };
+    }
+    const userId = await verifyUser(token);
+    if (!userId) throw unauthorized();
+    return { userId };
+  };
+  const role = async (who, id) => {
+    if (who.admin) return 'owner';
+    if (!who.userId) return null;
+    return (await store.list('device_members', { device_id: id, user_id: who.userId }, 1))[0]?.role ?? null;
+  };
+  const requireAccess = async (who, id, write = false) => {
+    if (who.deviceId) throw new ApiError(403, 'forbidden', 'Device keys can only send readings');
+    const access = await role(who, id);
+    if (!access) throw new ApiError(404, 'device_not_found', 'Register this device first');
+    if (write && access !== 'owner') throw new ApiError(403, 'forbidden', 'Only the device owner can change it');
   };
   const requireDevice = async id => {
     const value = await store.get('devices', deviceId(id));
@@ -110,17 +140,27 @@ export function createApp(config, store = createStore(config)) {
         res.end(data); return;
       }
       if (!path.startsWith('/api/v1/')) throw new ApiError(404, 'not_found', 'Route not found');
-      if (config.apiKey && !equalToken(req.headers.authorization || '', `Bearer ${config.apiKey}`)) throw new ApiError(401, 'unauthorized', 'Send Authorization: Bearer <API_KEY>');
+      const who = await authenticate(req);
       const method = req.method;
       if (path === '/api/v1/devices') {
-        if (method === 'GET') return json(res, 200, { devices: await store.list('devices', {}, 100) });
+        if (who.deviceId) throw new ApiError(403, 'forbidden', 'Device keys can only send readings');
+        if (method === 'GET') {
+          if (who.admin) return json(res, 200, { devices: await store.list('devices', {}, 100) });
+          const memberships = await store.list('device_members', { user_id: who.userId }, 100);
+          const devices = await Promise.all(memberships.map(m => store.get('devices', m.device_id)));
+          return json(res, 200, { devices: devices.filter(Boolean) });
+        }
         if (method === 'POST') {
           const value = validateDevice(await body(req));
-          return json(res, 201, await store.insert('devices', { ...value, created_at: now() }));
+          const device = await store.insert('devices', { ...value, created_at: now() });
+          if (who.userId) await store.insert('device_members', { id: randomUUID(), device_id: device.device_id, user_id: who.userId, role: 'owner', created_at: now() });
+          return json(res, 201, device);
         }
       }
       if (path === '/api/v1/readings' && method === 'POST') {
         const frame = validateFrame(await body(req));
+        if (who.userId) throw new ApiError(403, 'forbidden', 'Readings must be sent with the sensor\'s device key');
+        if (who.deviceId && who.deviceId !== frame.device_id) throw new ApiError(403, 'forbidden', 'This device key belongs to a different device');
         const requestHash = createHash('sha256').update(JSON.stringify(frame)).digest('hex');
         await requireDevice(frame.device_id);
         const existing = await store.get('readings', frame.event_id);
@@ -149,10 +189,16 @@ export function createApp(config, store = createStore(config)) {
         const view = safeFrame(savedRecord, cal); publish(frame.device_id, view);
         return json(res, 201, { duplicate: false, reading: view });
       }
-      const match = path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)(?:\/(calibrations|readings|stream|sessions))?$/);
+      const match = path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)(?:\/(calibrations|readings|stream|sessions|keys))?$/);
       if (match) {
         const [, id, resource] = match;
+        await requireAccess(who, id, method === 'POST');
         const device = await requireDevice(id);
+        if (resource === 'keys' && method === 'POST') {
+          const key = newDeviceKey();
+          const created = await store.insert('device_keys', { key_hash: hashDeviceKey(key), device_id: id, created_at: now(), prefix: key.slice(0, 10), created_by: who.userId ?? 'admin' });
+          return json(res, 201, { device_id: id, key, prefix: created.prefix, created_at: created.created_at });
+        }
         if (!resource && method === 'GET') {
           const selectedSource = source(url.searchParams.get('source') || 'hardware');
           const latest = (await store.list('readings', { device_id: id, source: selectedSource }, 1, 'measured_at'))[0];
@@ -235,6 +281,7 @@ export function createApp(config, store = createStore(config)) {
       if (sessionMatch) {
         const session = await store.get('sessions', sessionMatch[1]);
         if (!session) throw new ApiError(404, 'session_not_found', 'Session not found');
+        await requireAccess(who, session.device_id, method === 'POST');
         if (method === 'GET' && !sessionMatch[2]) return json(res, 200, await sessionView(session));
         if (method === 'POST' && sessionMatch[2]) {
           if (session.status === 'finished') return json(res, 200, await sessionView(session));

@@ -9,7 +9,7 @@ import { SupabaseStore } from '../src/storage.js';
 // A PostgREST protocol fixture, not the SQLite adapter. This exercises the actual
 // Supabase HTTP adapter and API together without claiming a live cloud test.
 function databaseFixture() {
-  const rows = new Map(['devices', 'calibrations', 'readings', 'sessions'].map(t => [t, []]));
+  const rows = new Map(['devices', 'calibrations', 'readings', 'sessions', 'device_members', 'device_keys'].map(t => [t, []]));
   let unavailable = false, rejectReadingWrite = false;
   const fetcher = async (url, options = {}) => {
     assert.equal(options.cache, 'no-store');

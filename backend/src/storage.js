@@ -8,6 +8,8 @@ const tables = {
   calibrations: { key: 'id', columns: ['id', 'device_id', 'created_at'] },
   readings: { key: 'event_id', columns: ['event_id', 'device_id', 'boot_id', 'sequence', 'source', 'measured_at', 'received_at'] },
   sessions: { key: 'id', columns: ['id', 'device_id', 'source', 'status', 'started_at'] },
+  device_members: { key: 'id', columns: ['id', 'device_id', 'user_id', 'role', 'created_at'] },
+  device_keys: { key: 'key_hash', columns: ['key_hash', 'device_id', 'created_at'] },
 };
 const allowedColumns = new Set(Object.values(tables).flatMap(t => t.columns));
 function definition(table) {
@@ -35,6 +37,9 @@ export class SQLiteStore {
       CREATE INDEX IF NOT EXISTS dm_readings_device_time ON dm_readings(device_id, source, measured_at DESC);
       CREATE TABLE IF NOT EXISTS dm_sessions (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), source TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS dm_one_active_session ON dm_sessions(device_id, source) WHERE status='active';
+      CREATE TABLE IF NOT EXISTS dm_device_members (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), user_id TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(device_id, user_id));
+      CREATE INDEX IF NOT EXISTS dm_device_members_user ON dm_device_members(user_id);
+      CREATE TABLE IF NOT EXISTS dm_device_keys (key_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), created_at TEXT NOT NULL, payload TEXT NOT NULL);
     `);
   }
   async ready() { this.db.prepare('SELECT 1 FROM dm_devices LIMIT 1').all(); }

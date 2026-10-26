@@ -19,4 +19,19 @@ Live frontend snapshots use backend SSE with fresh Data API queries every second
 
 Automatic empty-fixture calibrations use the existing `dm_calibrations.payload` JSON field for source, method and sample event IDs. No migration is required. They are immutable and source-specific; legacy manual baselines apply to both sources. Keep the fixture empty at startup; stability alone does not establish emptiness. See the root README for sample requirements and `AUTO_CALIBRATE=false`.
 
+## Users and sensor keys
+
+Apply `migrations/202610260001_device_access.sql` after the first migration. It adds:
+
+- `dm_device_members`: which Supabase Auth user owns (`owner`) or can view (`viewer`) each device.
+- `dm_device_keys`: SHA-256 hashes of per-sensor keys (`dk_...`). The plaintext key is returned once when created.
+
+The backend accepts three kinds of `Authorization: Bearer` token:
+
+- `API_KEY`: admin access to every device, for scripts such as `simulate` and `seed:practice`.
+- A Supabase Auth access token from a signed-in user: only devices that user is a member of. Owners can change a device and create keys; viewers can only read.
+- A device key: may only `POST /api/v1/readings` for its own device.
+
+With `API_KEY` empty, requests without a token keep full access for local prototyping, so set `API_KEY` whenever more than one person uses the backend. To enable sign-in in the web app, set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `web/.env.local`, and turn on the Email provider under Authentication in the Supabase dashboard. Signed-in users add a sensor from the insights page, which registers it with them as owner and shows its key once. Viewers are currently granted by inserting a `dm_device_members` row.
+
 `npm run seed:practice` writes an explicitly labeled, mock-only graph dataset into the existing four `dm_*` tables. The dedicated device ID is `graph-practice-sink-v1`. There are 280 readings and six completed drainage sessions sharing one source-specific calibration. Stable identifiers allow safe reruns and recovery from partial seeds. The script reads every saved frame back and checks completed durations. The `/insights` practice view reads these records through the backend; opening or replaying the page does not write data.
