@@ -1,1546 +1,305 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Retrofit bathtub drainage monitor",
-    "version": "0.1.0",
-    "description": "Two-US-100 prototype API. Bearer auth is required when API_KEY is configured (mandatory in production). Distances are mm, echo times µs, drainage durations ms. See README for experimental limitations."
+    "title": "Drain Monitor records API",
+    "version": "1.0.0",
+    "description": "Single-table drain_records storage. All calibration, results and forecasts are calculated by the backend. Server Supabase credentials never belong in ESP32 or browser code."
   },
-  "servers": [
-    {
-      "url": "/"
-    }
-  ],
   "security": [
     {
       "backendToken": []
     }
   ],
   "paths": {
-    "/health": {
+    "/api/v1/records": {
       "get": {
-        "summary": "Liveness and configuration mode",
-        "security": [],
+        "summary": "List recording summaries",
         "responses": {
           "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Success; POST creation/append may return 201"
           },
           "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Backend token required"
           },
           "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Conflict, missing calibration, or finished recording"
           },
           "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Invalid measurement or record input"
           },
           "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ready": {
-      "get": {
-        "summary": "Database readiness",
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices": {
-      "get": {
-        "summary": "List at most 100 devices",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Register a device",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegisterDevice"
-              }
-            }
+            "description": "Storage unavailable; no fallback"
           }
         },
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices/{id}": {
-      "get": {
-        "summary": "Latest frame, calibration and stale flag",
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-            }
-          },
-          {
-            "name": "source",
+            "name": "fixture_id",
             "in": "query",
             "schema": {
-              "type": "string",
-              "enum": [
-                "mock",
-                "hardware"
-              ],
-              "default": "hardware"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices/{id}/calibrations": {
-      "get": {
-        "summary": "Latest calibration for a source (legacy manual baselines apply to either source)",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+              "type": "string"
             }
           },
           {
-            "name": "source",
+            "name": "data_source",
             "in": "query",
             "schema": {
-              "type": "string",
-              "enum": [
-                "mock",
-                "hardware"
-              ],
-              "default": "hardware"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Store an immutable empty-tub calibration",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CalibrationInput"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/readings": {
-      "post": {
-        "summary": "Ingest one two-sensor frame",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameInput"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Idempotent retry of an already accepted frame",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "duplicate": {
-                      "const": true
-                    },
-                    "reading": {
-                      "$ref": "#/components/schemas/Frame"
-                    }
-                  },
-                  "required": [
-                    "duplicate",
-                    "reading"
-                  ]
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "duplicate": {
-                      "type": "boolean"
-                    },
-                    "reading": {
-                      "$ref": "#/components/schemas/Frame"
-                    }
-                  },
-                  "required": [
-                    "duplicate",
-                    "reading"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices/{id}/readings": {
-      "get": {
-        "summary": "Bounded newest-first history",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+              "type": "string"
             }
           },
           {
-            "name": "source",
+            "name": "record_type",
             "in": "query",
             "schema": {
-              "type": "string",
-              "enum": [
-                "mock",
-                "hardware"
-              ],
-              "default": "hardware"
+              "type": "string"
+            }
+          },
+          {
+            "name": "recording_status",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           },
           {
             "name": "limit",
             "in": "query",
             "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 500,
-              "default": 100
-            }
-          },
-          {
-            "name": "since",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "date-time"
+              "type": "string"
             }
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "readings": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Frame"
-                      }
-                    },
-                    "order": {
-                      "const": "newest_first"
-                    },
-                    "limit": {
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "readings",
-                    "order",
-                    "limit"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices/{id}/stream": {
-      "get": {
-        "summary": "Live SSE connected/reading/snapshot events; source-filtered snapshots query storage every second; reconnect for latest snapshot",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-            }
-          },
-          {
-            "name": "source",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "mock",
-                "hardware"
-              ],
-              "default": "hardware"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "SSE stream; use fetch to supply Authorization",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/devices/{id}/sessions": {
-      "get": {
-        "summary": "List at most 30 tests",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+        ]
       },
       "post": {
-        "summary": "Start a calibrated drainage test",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-            }
-          }
-        ],
+        "summary": "Start a recording. Calibration requires explicit empty confirmation.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionInput"
+                "type": "object",
+                "required": [
+                  "fixture_id",
+                  "record_type",
+                  "data_source"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "fixture_id": {
+                    "type": "string"
+                  },
+                  "record_type": {
+                    "enum": [
+                      "calibration",
+                      "drainage",
+                      "monitoring"
+                    ]
+                  },
+                  "data_source": {
+                    "enum": [
+                      "sensor",
+                      "simulation"
+                    ]
+                  },
+                  "confirm_empty": {
+                    "type": "boolean"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+          "200": {
+            "description": "Success; POST creation/append may return 201"
           },
           "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Backend token required"
           },
           "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Conflict, missing calibration, or finished recording"
           },
           "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Invalid measurement or record input"
           },
           "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Storage unavailable; no fallback"
           }
         }
       }
     },
-    "/api/v1/sessions/{id}": {
+    "/api/v1/records/{record_id}": {
       "get": {
-        "summary": "Read test and analysis",
+        "summary": "Get a recording and backend-computed forecast/replay timeline",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
         "parameters": [
           {
-            "name": "id",
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sample",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}/measurements": {
+      "post": {
+        "summary": "Append one reading; retry the identical reading_id/body safely",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reading_id",
+                  "timestamp",
+                  "sensor_a",
+                  "sensor_b"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "reading_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "sensor_a": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "distance_mm",
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "distance_mm": {
+                            "type": "number",
+                            "minimum": 20,
+                            "maximum": 4500
+                          },
+                          "status": {
+                            "const": "ok"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "distance_mm",
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "distance_mm": {
+                            "type": "null"
+                          },
+                          "status": {
+                            "enum": [
+                              "timeout",
+                              "out_of_range"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "sensor_b": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "distance_mm",
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "distance_mm": {
+                            "type": "number",
+                            "minimum": 20,
+                            "maximum": 4500
+                          },
+                          "status": {
+                            "const": "ok"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "distance_mm",
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "distance_mm": {
+                            "type": "null"
+                          },
+                          "status": {
+                            "enum": [
+                              "timeout",
+                              "out_of_range"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "record_id",
             "in": "path",
             "required": true,
             "schema": {
@@ -1548,227 +307,169 @@
               "format": "uuid"
             }
           }
-        ],
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}/finish": {
+      "post": {
+        "summary": "Finish recording and persist backend result",
         "responses": {
           "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Success; POST creation/append may return 201"
           },
           "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Backend token required"
           },
           "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Conflict, missing calibration, or finished recording"
           },
           "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "description": "Invalid measurement or record input"
           },
           "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}/stream": {
+      "get": {
+        "summary": "Authenticated SSE snapshots of recording and backend computations",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "summary": "List fixtures visible to the signed-in user",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        }
+      },
+      "post": {
+        "summary": "Register a fixture and assign its signed-in owner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "device_id",
+                  "name"
+                ],
+                "properties": {
+                  "device_id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
                 }
               }
             }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
           }
         }
       }
     },
-    "/api/v1/sessions/{id}/finish": {
+    "/api/v1/devices/{device_id}/keys": {
       "post": {
-        "summary": "Close a test and freeze its result; safe to retry",
+        "summary": "Owner-only sensor key issuance; full key is returned once",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
         "parameters": [
           {
-            "name": "id",
+            "name": "device_id",
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "type": "string"
             }
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request or storage error; inspect error.code",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+        ]
       }
     }
   },
@@ -1777,531 +478,111 @@
       "backendToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Backend API_KEY. Never send the Supabase secret to this API."
+        "description": "Backend API_KEY for admin, Supabase access token for owner/viewer access, or fixture device key for physical measurement appends only."
       }
     },
     "schemas": {
-      "RegisterDevice": {
+      "Measurement": {
         "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "device_id": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
         "required": [
-          "device_id",
-          "name"
-        ]
-      },
-      "CalibrationInput": {
-        "type": "object",
+          "reading_id",
+          "timestamp",
+          "sensor_a",
+          "sensor_b"
+        ],
         "additionalProperties": false,
         "properties": {
-          "source": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "hardware"
-            ]
-          },
-          "empty_distance_mm": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "a": {
-                "type": "number",
-                "minimum": 20,
-                "maximum": 4500
-              },
-              "b": {
-                "type": "number",
-                "minimum": 20,
-                "maximum": 4500
-              }
-            },
-            "required": [
-              "a",
-              "b"
-            ]
-          },
-          "wet_threshold_mm": {
-            "type": "number",
-            "minimum": 5,
-            "maximum": 1000,
-            "default": 20
-          },
-          "dry_threshold_mm": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000,
-            "default": 8
-          },
-          "stable_samples": {
-            "type": "integer",
-            "minimum": 2,
-            "maximum": 20,
-            "default": 3
-          },
-          "max_gap_ms": {
-            "type": "integer",
-            "minimum": 100,
-            "maximum": 60000,
-            "default": 5000
-          }
-        },
-        "required": [
-          "empty_distance_mm"
-        ]
-      },
-      "SensorInput": {
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "sensor_id": {
-                "type": "string",
-                "enum": [
-                  "a",
-                  "b"
-                ]
-              },
-              "status": {
-                "const": "ok"
-              },
-              "distance_mm": {
-                "type": "number",
-                "minimum": 20,
-                "maximum": 4500
-              },
-              "echo_us": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "sensor_id",
-              "status",
-              "distance_mm"
-            ]
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "sensor_id": {
-                "type": "string",
-                "enum": [
-                  "a",
-                  "b"
-                ]
-              },
-              "status": {
-                "const": "ok"
-              },
-              "echo_us": {
-                "type": "number",
-                "minimum": 1,
-                "maximum": 40000
-              },
-              "distance_mm": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "sensor_id",
-              "status",
-              "echo_us"
-            ]
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "sensor_id": {
-                "type": "string",
-                "enum": [
-                  "a",
-                  "b"
-                ]
-              },
-              "status": {
-                "enum": [
-                  "timeout",
-                  "out_of_range"
-                ]
-              },
-              "distance_mm": {
-                "type": "null"
-              },
-              "echo_us": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "sensor_id",
-              "status"
-            ]
-          }
-        ]
-      },
-      "FrameInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "event_id": {
+          "reading_id": {
             "type": "string",
             "format": "uuid"
           },
-          "device_id": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-          },
-          "boot_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "sequence": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 2147483647
-          },
-          "captured_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Omit/null before clock synchronization; never more than two minutes in the future."
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "hardware"
-            ]
-          },
-          "temperature_c": {
-            "anyOf": [
-              {
-                "type": "number",
-                "minimum": -20,
-                "maximum": 70
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "readings": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "items": {
-              "$ref": "#/components/schemas/SensorInput"
-            },
-            "description": "Exactly one sensor a and one b. Converted echo distance must also be within 20–4500mm."
-          }
-        },
-        "required": [
-          "event_id",
-          "device_id",
-          "boot_id",
-          "sequence",
-          "source",
-          "readings"
-        ]
-      },
-      "SessionInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "source": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "hardware"
-            ]
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "source"
-        ]
-      },
-      "Analysis": {
-        "type": "object",
-        "properties": {
-          "outcome": {
-            "enum": [
-              "completed",
-              "incomplete",
-              "inconclusive"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "drain_duration_ms": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "wet_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "dry_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "completed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "invalid_frames": {
-            "type": "integer"
-          },
-          "frame_count": {
-            "type": "integer"
-          },
-          "timing_basis": {
-            "type": "array",
-            "items": {
-              "enum": [
-                "device_clock",
-                "server_received"
-              ]
-            }
-          }
-        }
-      },
-      "Frame": {
-        "type": "object",
-        "properties": {
-          "event_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "device_id": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-          },
-          "boot_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "sequence": {
-            "type": "integer"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "hardware"
-            ]
-          },
-          "measured_at": {
+          "timestamp": {
             "type": "string",
             "format": "date-time"
           },
-          "received_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "captured_at": {
-            "anyOf": [
+          "sensor_a": {
+            "oneOf": [
               {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "calibration_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "time_basis": {
-            "enum": [
-              "device_clock",
-              "server_received"
-            ]
-          },
-          "readings": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "levels": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "sensor_id": {
-                  "type": "string",
-                  "enum": [
-                    "a",
-                    "b"
-                  ]
-                },
-                "status": {
-                  "type": "string"
-                },
-                "distance_mm": {
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "depth_mm": {
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "quality": {
-                  "type": "string"
+                "type": "object",
+                "required": [
+                  "distance_mm",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "distance_mm": {
+                    "type": "number",
+                    "minimum": 20,
+                    "maximum": 4500
+                  },
+                  "status": {
+                    "const": "ok"
+                  }
                 }
               },
-              "required": [
-                "sensor_id",
-                "status",
-                "distance_mm",
-                "depth_mm",
-                "quality"
-              ]
-            }
-          }
-        }
-      },
-      "Session": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "device_id": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_-]{1,64}$"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "hardware"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "finished"
-            ]
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "finished_at": {
-            "anyOf": [
               {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
+                "type": "object",
+                "required": [
+                  "distance_mm",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "distance_mm": {
+                    "type": "null"
+                  },
+                  "status": {
+                    "enum": [
+                      "timeout",
+                      "out_of_range"
+                    ]
+                  }
+                }
               }
             ]
           },
-          "calibration_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "analysis": {
-            "$ref": "#/components/schemas/Analysis"
-          }
-        }
-      },
-      "Error": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "code": {
-                "type": "string"
+          "sensor_b": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "distance_mm",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "distance_mm": {
+                    "type": "number",
+                    "minimum": 20,
+                    "maximum": 4500
+                  },
+                  "status": {
+                    "const": "ok"
+                  }
+                }
               },
-              "message": {
-                "type": "string"
-              },
-              "request_id": {
-                "type": "string",
-                "format": "uuid"
+              {
+                "type": "object",
+                "required": [
+                  "distance_mm",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "distance_mm": {
+                    "type": "null"
+                  },
+                  "status": {
+                    "enum": [
+                      "timeout",
+                      "out_of_range"
+                    ]
+                  }
+                }
               }
-            },
-            "required": [
-              "code",
-              "message",
-              "request_id"
             ]
           }
-        },
-        "required": [
-          "error"
-        ]
+        }
       }
     }
   }

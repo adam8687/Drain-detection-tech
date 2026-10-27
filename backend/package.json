@@ -13,7 +13,8 @@
     "simulate": "node --env-file-if-exists=.env scripts/simulate.js",
     "check:supabase": "node --env-file-if-exists=.env scripts/check-supabase.js",
     "verify:supabase": "node --env-file-if-exists=.env scripts/verify-supabase.js",
-    "check": "node --check src/server.js && node --check public/app.js && npm test",
-    "seed:practice": "node --env-file-if-exists=.env scripts/seed-practice.js"
+    "check": "node --check src/server.js && node --check src/records-storage.js && node --check src/records-domain.js && npm test",
+    "seed:practice": "node --env-file-if-exists=.env scripts/seed-practice.js",
+    "migrate:records": "node --env-file-if-exists=.env scripts/migrate-records.js"
   }
 }

@@ -14,6 +14,7 @@
     "simulate": "npm --prefix backend run simulate --",
     "check:supabase": "npm --prefix backend run check:supabase",
     "verify:supabase": "npm --prefix backend run verify:supabase",
-    "seed:practice": "npm --prefix backend run seed:practice"
+    "seed:practice": "npm --prefix backend run seed:practice",
+    "migrate:records": "npm --prefix backend run migrate:records"
   }
 }

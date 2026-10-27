@@ -1,79 +1,38 @@
-import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { createRecordStore } from '../src/records-storage.js';
 import { configFromEnv } from '../src/config.js';
-import { createStore } from '../src/storage.js';
-import { validateFrame, validateCalibration } from '../src/validation.js';
-import { analyzeSession } from '../src/domain.js';
+import { simulateMeasurements } from '../src/simulation.js';
+import { analyzeDrainage, learnCalibration } from '../src/records-domain.js';
 
-export const PRACTICE_DEVICE = 'graph-practice-sink-v1';
-export const PRACTICE_DURATIONS = [39, 40, 38, 42, 48, 55];
-const seedTag = 'supabase-graph-practice-v1';
-function id(label) {
-  const hash = createHash('sha256').update(`${seedTag}:${label}`).digest('hex');
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
-}
-
-// Only this explicitly invoked script writes practice records. Page loads are read-only.
-export async function seedPracticeData(store, now = Date.now(), progress = () => {}) {
+export const PRACTICE_FIXTURE = 'practice-sink-v2';
+const stableId = label => { const h = createHash('sha256').update(`records-practice-v2:${label}`).digest('hex'); return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`; };
+export async function seedPracticeData(store, progress = () => {}) {
   await store.ready();
-  let device = await store.get('devices', PRACTICE_DEVICE);
-  if (device && device.seed_tag !== seedTag) throw Error('Practice device ID is already in use; refusing to modify it.');
-  if (!device) device = await store.insert('devices', { device_id: PRACTICE_DEVICE, name: 'Supabase practice sink — synthetic readings', created_at: new Date(now).toISOString(), seed_tag: seedTag, seed_started_at: new Date(now - 7 * 86400000).toISOString() });
-  const calibration = { ...validateCalibration({ source: 'mock', empty_distance_mm: { a: 400, b: 420 } }), id: id('calibration'), device_id: PRACTICE_DEVICE, created_at: device.seed_started_at, seed_tag: seedTag };
-  const existingCalibration = await store.get('calibrations', calibration.id);
-  if (existingCalibration) assert.deepEqual(existingCalibration, calibration);
-  else await store.insert('calibrations', calibration);
-  const saved = new Map((await store.list('readings', { device_id: PRACTICE_DEVICE }, 500, 'measured_at')).map(frame => [frame.event_id, frame]));
-  const expected = [];
-  for (const [testIndex, seconds] of PRACTICE_DURATIONS.entries()) {
-    const start = Date.parse(device.seed_started_at) + (testIndex + 1) * 86400000;
-    const session = { id: id(`test-${testIndex}`), device_id: PRACTICE_DEVICE, source: 'mock', name: `Practice test ${testIndex + 1} — synthetic ${seconds}s drainage`, status: 'finished', started_at: new Date(start).toISOString(), finished_at: new Date(start + (seconds + 2) * 1000).toISOString(), calibration_id: calibration.id, seed_tag: seedTag };
-    const records = Array.from({ length: seconds + 3 }, (_, sequence) => {
-      const depth = sequence < seconds ? 8 + (seconds - sequence) * 92 / seconds : Math.max(0, 6 - (sequence - seconds) * 3);
-      const input = validateFrame({ event_id: id(`test-${testIndex}-frame-${sequence}`), device_id: PRACTICE_DEVICE, boot_id: id(`boot-${testIndex}`), sequence, source: 'mock', captured_at: new Date(start + sequence * 1000).toISOString(), temperature_c: 20,
-        readings: ['a', 'b'].map((sensor_id, index) => ({ sensor_id, status: 'ok', distance_mm: Math.round(((index ? 420 : 400) - depth + Math.sin(sequence * 0.8 + index) * 0.25) * 10) / 10 })) });
-      const request_hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-      const old = saved.get(input.event_id);
-      if (old) { assert.equal(old.request_hash, request_hash); assert.equal(old.calibration_id, calibration.id); return old; }
-      return { ...input, received_at: new Date(now).toISOString(), measured_at: input.captured_at, time_basis: 'device_clock', calibration_id: calibration.id, request_hash, seed_tag: seedTag };
-    });
-    for (let offset = 0; offset < records.length; offset += 8) {
-      await Promise.all(records.slice(offset, offset + 8).filter(frame => !saved.has(frame.event_id)).map(frame => store.insert('readings', frame)));
-    }
-    expected.push(...records);
-    const analysis = analyzeSession(session, records, calibration);
-    assert.equal(analysis.outcome, 'completed'); assert.equal(analysis.drain_duration_ms, seconds * 1000);
-    const report = { ...session, analysis };
-    const existingSession = await store.get('sessions', report.id);
-    if (existingSession) assert.deepEqual(existingSession, report);
-    else await store.insert('sessions', report);
-    progress(`Saved practice test ${testIndex + 1}: ${seconds} seconds.`);
+  // Stable historical times and IDs make retries independent of the day of rerun.
+  const start = Date.parse('2026-10-20T12:00:00.000Z');
+  const measurements = simulateMeasurements({ scenario: 'empty', start, makeId: i => stableId(`cal-${i}`) });
+  const calibration = learnCalibration(measurements).calibration;
+  if (!calibration) throw Error('Invalid calibration fixture');
+  const records = [{ record_id: stableId('calibration'), fixture_id: PRACTICE_FIXTURE, record_type: 'calibration', data_source: 'simulation', recording_status: 'finished', calibration, measurements, result: null, created_at: new Date(start).toISOString() }];
+  for (const [index, scenario] of ['normal','slow','pooling','timeout','gap','shallow'].entries()) {
+    const time = start + (index + 1) * 86400000;
+    const points = simulateMeasurements({ scenario, start: time, seed: 100 + index, makeId: i => stableId(`${scenario}-${i}`) });
+    records.push({ record_id: stableId(scenario), fixture_id: PRACTICE_FIXTURE, record_type: 'drainage', data_source: 'simulation', recording_status: 'finished', calibration, measurements: points, result: analyzeDrainage(points, calibration).result, created_at: new Date(time).toISOString() });
   }
-  // Query again after persistence, rather than returning generated fixtures to the graph.
-  const readback = await store.list('readings', { device_id: PRACTICE_DEVICE, source: 'mock' }, 500, 'measured_at');
-  const sessions = await store.list('sessions', { device_id: PRACTICE_DEVICE, source: 'mock' }, 30, 'started_at');
-  assert.equal(readback.length, expected.length);
-  assert.equal(sessions.length, PRACTICE_DURATIONS.length);
-  for (const frame of expected) assert.deepEqual(readback.find(row => row.event_id === frame.event_id), frame);
-  return { device_id: PRACTICE_DEVICE, readings: readback.length, tests: sessions.length };
+  for (const record of records) {
+    const existing = await store.get(record.record_id);
+    if (existing) { if (!isDeepStrictEqual(existing, record)) throw Error('Practice record conflict; refusing to overwrite'); }
+    else await store.insert(record);
+    if (!isDeepStrictEqual(await store.get(record.record_id), record)) throw Error('Readback mismatch');
+    progress(`${record.record_type}: ${record.result?.outcome ?? 'calibrated'} (${record.measurements.length} measurements)`);
+  }
+  return { fixture_id: PRACTICE_FIXTURE, records: records.length, measurements: records.reduce((n, row) => n + row.measurements.length, 0) };
 }
-
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let store;
-  try {
-    const config = configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' });
-    store = createStore(config);
-    const result = await seedPracticeData(store, Date.now(), console.log);
-    // A separate adapter confirms that reads do not depend on seed-process state.
-    const observer = createStore(config);
-    try {
-      const frames = await observer.list('readings', { device_id: result.device_id, source: 'mock' }, 500, 'measured_at');
-      assert.equal(frames.length, result.readings);
-    } finally { await observer.close(); }
-    console.log(`PASS: Supabase readback verified ${result.readings} mock readings and ${result.tests} completed tests. Device: ${result.device_id}. Rerunning is safe and adds no duplicates.`);
-  } catch (error) {
-    console.error(error.status === 503 ? error.message : 'Practice seed failed. Check database access and existing practice records; partial mock records can be resumed by rerunning.');
-    process.exitCode = 1;
-  } finally { if (store) await store.close(); }
+  try { store = createRecordStore(configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' })); const result = await seedPracticeData(store, console.log); console.log(`PASS: saved and read back ${result.records} records and ${result.measurements} measurements for ${result.fixture_id}. No hardware data changed.`); }
+  catch (error) { console.error(error.status === 503 ? error.message : 'Practice seed failed; no existing records were overwritten. Apply the new migration, then retry.'); process.exitCode = 1; }
+  finally { if (store) await store.close(); }
 }

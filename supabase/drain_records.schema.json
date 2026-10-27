@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "drain_records",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "fixture_id",
+    "record_type",
+    "data_source",
+    "recording_status",
+    "calibration",
+    "measurements",
+    "result",
+    "created_at"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "fixture_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+    },
+    "record_type": {
+      "enum": [
+        "calibration",
+        "drainage",
+        "monitoring"
+      ]
+    },
+    "data_source": {
+      "enum": [
+        "sensor",
+        "simulation"
+      ]
+    },
+    "recording_status": {
+      "enum": [
+        "recording",
+        "finished"
+      ]
+    },
+    "calibration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/calibration"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "measurements": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/measurement"
+      }
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/result"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Backend-assigned ordering metadata; not a sensor input."
+    }
+  },
+  "$defs": {
+    "sensor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "distance_mm",
+            "status"
+          ],
+          "properties": {
+            "distance_mm": {
+              "type": "number",
+              "minimum": 20,
+              "maximum": 4500
+            },
+            "status": {
+              "const": "ok"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "distance_mm",
+            "status"
+          ],
+          "properties": {
+            "distance_mm": {
+              "type": "null"
+            },
+            "status": {
+              "enum": [
+                "timeout",
+                "out_of_range"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reading_id",
+        "timestamp",
+        "sensor_a",
+        "sensor_b"
+      ],
+      "properties": {
+        "reading_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sensor_a": {
+          "$ref": "#/$defs/sensor"
+        },
+        "sensor_b": {
+          "$ref": "#/$defs/sensor"
+        }
+      }
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sensor_a_empty_mm",
+        "sensor_b_empty_mm"
+      ],
+      "properties": {
+        "sensor_a_empty_mm": {
+          "type": "number",
+          "minimum": 20,
+          "maximum": 4500
+        },
+        "sensor_b_empty_mm": {
+          "type": "number",
+          "minimum": 20,
+          "maximum": 4500
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drainage_time_seconds",
+        "outcome"
+      ],
+      "properties": {
+        "drainage_time_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "incomplete",
+            "uncertain"
+          ]
+        }
+      }
+    }
+  },
+  "$comment": "Backend enforces unique reading_id values, identical retries, atomic appends, source-scoped calibration and backend-only results. created_at is the one additional server metadata field. Detection settings are fixed in records-domain.js."
+}

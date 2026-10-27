@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { DrainApi, DrainApiError } from '../lib/api';
 import { supabase, useSession } from '../lib/supabase';
 
-const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+const baseUrl = '/api/backend';
 
 export default function AccountPanel() {
   const session = useSession();

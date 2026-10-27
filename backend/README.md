@@ -1,163 +1,57 @@
-# Retrofit bathtub drainage monitor
+# Backend: drain_records
 
-Backend foundation for the Texas Convergent IoT build: **two US-100 ultrasonic sensors → ESP32 → HTTP JSON → backend → database + frontend**. Mock and hardware producers use the same contract. This repository includes a deliberately plain integration console; the design team can replace it without changing the API.
+Node.js 24+, no dependency install. `npm start` from the root loads `backend/.env`, uses Supabase by default, and fails startup if `drain_records` cannot be read. There is no silent SQLite fallback. Apply `supabase/migrations/202610270001_drain_records.sql` before starting. Run `npm run migrate:records` to copy legacy Supabase records while older writers are stopped. See the root README for the complete upgrade/run/push sequence.
 
-## Run with Supabase — no hardware or backend package install needed
+## Canonical routes
 
-Requires **Node.js 24 or newer** (uses built-in `node:sqlite`). There are no third-party runtime or test dependencies.
+All `/api/v1` requests require `Authorization: Bearer <API_KEY>` when configured. Never use the Supabase secret as the prototype API token. `/health`, `/ready` and `/openapi.json` are public and reveal no credentials.
 
-```sh
-npm --prefix .. run setup
-# Fill SUPABASE_URL and SUPABASE_SECRET_KEY, and apply the SQL migration first.
-npm run check:supabase
-npm run verify:supabase
-npm start
+### Start a record
+
+`POST /api/v1/records`, JSON:
+
+```json
+{"fixture_id":"kitchen-sink","record_type":"calibration","data_source":"sensor","confirm_empty":true}
 ```
 
-Open **http://localhost:8000** for the integration console, **http://localhost:8000/docs** for the API guide, and **http://localhost:8000/openapi.json** for the OpenAPI 3.1 contract. Supabase is the default source of truth. Startup checks all four tables and fails if access is unavailable; there is no automatic local fallback. SQLite is only an explicit offline test option (`STORAGE_BACKEND=sqlite`), and is rejected in production. Node may print a warning that its SQLite API is experimental; that does not indicate a failed startup.
+Use `record_type: "drainage"` after successful calibration, or `monitoring` to record outside an event. `confirm_empty: true` is required for calibration only. One recording may be active per fixture and source. Signed-in users register fixtures in the retained ownership registry before creating recordings. Returns 201 with `record_id` and the new row.
 
-In a second terminal:
+### Append one measurement
 
-```sh
-npm run simulate -- normal
-npm run simulate -- slow
-npm run simulate -- timeout
-npm run simulate -- shallow
-```
-
-Run scenarios one at a time. Select `demo-tub` and **Mock** in the console. Normal is about 9 seconds, slow about 25 seconds, timeout deliberately loses sensor B near the end, and shallow never provides enough water to start a valid filled-tub drainage measurement. These are synthetic engineering fixtures, not measured tub performance. If a sender is interrupted, use **Refresh tests → Finish test** before starting another test for that device/source.
-
-```mermaid
-flowchart TD
-    Sensors["US-100 A and B"] --> ESP["ESP32"]
-    ESP --> API["HTTP JSON API"]
-    Mock["Mock sender"] --> API
-    API --> DB["Supabase source of truth"]
-    API --> UI["Team frontend: REST and SSE"]
-```
-
-## Implemented
-
-- Device registration and bounded reading history, with strict JSON validation and structured errors.
-- Two independent sensor readings per frame, in millimeters or raw echo microseconds. Missing echoes are explicit unknown values.
-- Idempotent retries with `event_id`; `(device_id, boot_id, sequence)` also prevents duplicated measurements.
-- Immutable per-sensor empty-tub calibrations. History retains its original calibration. A test pins its starting calibration.
-- Explicit drainage test start/finish and durable results. Completion requires both sensors to become wet, then both to become stably dry. Large gaps produce inconclusive results.
-- Mock/hardware source separation, stale-device indication, REST access and live Server-Sent Events.
-- Supabase-backed persistence, fresh database reads, a SQL migration with RLS, a real write/read verification command, deployment container, CI and integration tests. SQLite exists only for explicit offline tests.
-
-## Sensor contract
-
-Register a stable physical device ID before sending measurements. Sensor `a` is near the drain; `b` is farther along the tub. Each US-100 module contains two transducers; the system still has **two measurement locations**, not four sensors.
-
-```sh
-curl -X POST http://localhost:8000/api/v1/devices \
-  -H 'Content-Type: application/json' \
-  -d '{"device_id":"tub-01","name":"Prototype bathtub"}'
-```
-
-Send a frame about once per second; the ESP32 should trigger A and B **sequentially**, allowing an echo timeout and a quiet interval between them to limit acoustic interference. Begin hardware experiments with at least 60ms between triggers, then validate that spacing on the actual tub. The backend cannot correct acoustic interference in firmware.
+`POST /api/v1/records/{record_id}/measurements`, JSON:
 
 ```json
 {
-  "event_id": "10000000-0000-4000-8000-000000000001",
-  "device_id": "tub-01",
-  "boot_id": "20000000-0000-4000-8000-000000000001",
-  "sequence": 0,
-  "captured_at": null,
-  "source": "hardware",
-  "temperature_c": 20,
-  "readings": [
-    { "sensor_id": "a", "status": "ok", "distance_mm": 300 },
-    { "sensor_id": "b", "status": "timeout" }
-  ]
+  "reading_id":"1c3b45dd-0994-44ac-a48f-4dd8bc781a53",
+  "timestamp":"2026-10-27T12:00:00.000Z",
+  "sensor_a":{"distance_mm":313,"status":"ok"},
+  "sensor_b":{"distance_mm":null,"status":"timeout"}
 }
 ```
 
-POST that JSON to `/api/v1/readings`. A new event returns 201. Retrying the same event and payload returns 200 with `duplicate: true`. Reusing an event ID with changed contents, or using a new event ID for the same device/boot/sequence, returns 409. Keep the event ID and payload unchanged through retries, generate a fresh boot UUID on restart, and increment sequence for each new frame. A retry may have an old timestamp; do not regenerate its timestamp.
+The ESP32 generates a new UUID per paired sample and reuses the exact body on retry. Timestamp must include a timezone; synchronize its clock before recording. Normalize to UTC, keep the clock continuous, and start a new recording after a clock reset. There is no boot ID, sample number, temperature or echo-time input in this distance-only API. Failed readings use a null distance and `timeout` or `out_of_range` status. Distance limits are 20–4500 mm; validate actual purchased hardware separately.
 
-For each `ok` reading, send exactly one of:
+201 means persistence succeeded. 200 means an identical point was already stored. Conflicting IDs, new measurements on a finished record, or full recordings return 409. The backend uses atomic compare-and-set retries to avoid losing concurrent appends. Raw measurement requests are limited to 16KB and recordings to 5000 points. Close and start a new monitoring window at that limit.
 
-- `distance_mm`: distance already calculated by firmware or returned in US-100 UART mode. Range 20–4500mm.
-- `echo_us`: round-trip pulse duration. The backend calculates `distance_mm = echo_us × (331.3 + 0.606 × temperature_c) / 2000`; 20°C is assumed if temperature is absent. This approximation and sensor accuracy are not the same thing. Do not apply it to UART distance values.
+Empty calibration auto-finishes after at least 20 valid stable paired samples spanning eight seconds. Drainage auto-finishes only after water has been observed and both sensors confirm dry for consecutive samples. Results are calculated and saved on the backend. Finishing an incomplete drainage record stores an incomplete/uncertain result; a failed calibration can be finished but is not selected as a usable baseline. New recordings copy the latest usable calibration for the same fixture and data source, so recalibration does not change old baseline snapshots.
 
-Use `status: "timeout"` or `"out_of_range"` with omitted/null measurement fields for failed readings. Do not use zero to represent no echo. Send both sensor entries even if one fails.
+### Retrieve, replay and finish
 
-`captured_at` must be timezone-aware ISO 8601 after ESP32 clock synchronization. Before synchronization, omit it or send null: the server timestamps receipt and reports `time_basis: "server_received"`. That time includes network delays and is unsuitable for precise timing if buffered samples are uploaded together. Mixing timing bases within an experiment makes its timing result inconclusive. Raw echo duration is the acoustic round trip; **drainage time is elapsed time across multiple frames**, not echo duration.
+- `GET /api/v1/records`: summary list, optional `fixture_id`, `data_source`, `record_type`, `recording_status`, `limit` (1–200).
+- `GET /api/v1/records/{id}`: `{ record, computed }`. `computed` contains backend forecast, countdown timeline, sample count, staleness and calibration progress.
+- Add `?sample=20` to replay only the observations available through that sample. No future measurements are used for its estimate.
+- `POST /api/v1/records/{id}/finish`: finish and persist the result; safe to repeat.
+- `GET /api/v1/records/{id}/stream`: authenticated fetch SSE, with connected/snapshot/unavailable events and heartbeats. It polls persistent storage and sees external writers. The frontend currently uses REST polling for active recordings.
 
-## Calibration and drainage tests
+Current detector settings and forecast limits are documented in the root README. Neither forecasts nor drainage time diagnose a blockage or pipe corrosion.
 
-1. Mount both modules so they face down and their mounts cannot move during a test. Keep them dry. US-100 boards are not waterproof.
-2. With an empty tub, collect stable valid readings for each sensor independently. Reject outliers and use the median as its `empty_distance_mm`. The API stores the chosen baselines; it does not automatically estimate them from a single frame.
-3. POST `/api/v1/devices/tub-01/calibrations`:
+## Legacy data
 
-```json
-{"empty_distance_mm":{"a":400,"b":420},"wet_threshold_mm":20,"dry_threshold_mm":8,"stable_samples":3,"max_gap_ms":5000}
-```
+The importer preserves legacy raw values, timestamps, fixture IDs, baseline snapshots, source labels and already completed durations. Unassigned readings become finished monitoring records, split at 5000 points. Missing baselines or conflicting destination rows abort rather than discard data. All old tables remain unchanged. Names, old sensor echo/temperature metadata, hash/boot/sequence fields and custom threshold settings remain available only in those legacy backups. Converted fixed-schema measurements use distance in millimeters; existing saved outcomes remain frozen.
 
-4. Fill the tub so water is visible under **both** sensors. POST `/api/v1/devices/tub-01/sessions` with `{"source":"hardware","name":"Drain test 1"}` immediately before opening the drain.
-5. Continue sending frames while it drains. GET `/api/v1/sessions/{id}` for analysis; POST `/api/v1/sessions/{id}/finish` to close and store the result.
+The old `src/storage.js`, `src/domain.js`, fixture-calibration helper and older migrations are retained for legacy reference, not the active server's storage path. Older console assets are not served. Do not run an old backend against the new deployment.
 
-Local depth is `max(0, empty_distance_mm - measured_distance_mm)`. An echo more than 20mm beyond the known floor is marked invalid rather than dry. These thresholds are **initial configurable test settings**, not validated product tolerances. Different floor heights mean local depths may differ even for a flat water surface; the backend does not average the two readings or assume disagreement means sensor failure. Width and tub volume are unnecessary for elapsed drainage time. Liters/minute would require separate geometry/volume calibration and is not implemented.
 
-Drainage time runs from the first frame where **both sensors** are at or above the wet threshold to the first of the required consecutive frames where **both sensors** are below the dry threshold. A failed frame resets the consecutive dry counter. A gap beyond `max_gap_ms` between valid frames after wet detection invalidates the timing result. A sensor that was never wet prevents a completed measurement. This initial method targets filled-bath tests; it does not solve shallow shower runoff at the far end.
+## Sign-in and sensor authorization
 
-Completed reports are frozen; late packets do not rewrite them. Active reports are recomputed from stored frames, including out-of-order arrivals. Sessions longer than 5000 frames return inconclusive; use bounded experiments. Repeated timestamps do not count as independent stable samples.
-
-**Not implemented or established:** automatic plug-release detection, validated clog classification, corrosion sensing, direct flow measurement, automatic healthy/slow thresholds, predictive maintenance, customer accounts/tenant separation, billing, piezo commands or deployed ESP32 firmware. The API is the handoff contract for the firmware and design teams. Collect repeatable clean/partially restricted drainage experiments before claiming diagnostic accuracy.
-
-## Connect the design team's frontend or an ESP32
-
-The server binds to `0.0.0.0` by default. On the same Wi-Fi, use `http://<backend-computer-LAN-IP>:8000`; **localhost on an ESP32 points to the ESP32, not your laptop**. Allow inbound port 8000 through the host firewall. University guest Wi-Fi may isolate devices; use a permitted shared network/hotspot if necessary.
-
-- Frontend: use the backend base URL, never the Supabase secret. Set `CORS_ORIGINS` to its exact development origin(s), comma-separated. Default: localhost/127.0.0.1 on ports 3000 and 5173. A development-only `*` is supported.
-- ESP32: POST frames with `Content-Type: application/json`. CORS is a browser rule and does not restrict the ESP32.
-- With `API_KEY` configured, both clients send `Authorization: Bearer <API_KEY>`. This is a shared team prototype token, not user authentication. The test page holds it only in memory.
-- SSE: GET `/api/v1/devices/{id}/stream` using streaming `fetch` when auth is enabled; native browser EventSource cannot add that Authorization header. The endpoint sends `connected` and `reading` events with 15-second comment heartbeats. It sends both mock and hardware events; filter on `source` as the console does.
-- SSE is a live convenience with no replay. On reconnect, recover state/history using REST, then reconnect. There is a small REST/SSE subscription race: refresh REST again after subscribing when gap-free display matters.
-- History supports `?source=hardware&limit=100&since=<ISO-timestamp>` (newest first, limit 1–500). It is a bounded integration history, not an exhaustive export endpoint. GET devices lists at most 100, tests at most 30.
-
-## Supabase setup
-
-The uploaded project information supplies a project URL, publishable key and server secret. A server secret permits Data API access; it is **not** a database password or Management API token, so it cannot apply SQL migrations.
-
-1. In the project's Supabase SQL Editor, run `../supabase/migrations/202610220001_drain_monitor.sql` (relative to this backend directory) once. It creates only `dm_*` tables, enables RLS and denies direct anonymous/authenticated access. The controlled backend uses the secret key. No public database policies are needed.
-2. Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in the **server's** `.env`. Never use a `VITE_`/`NEXT_PUBLIC_` prefix for the secret, send it to ESP32 firmware, or commit the uploaded credentials.
-3. Leave `STORAGE_BACKEND=supabase` (the default). Run `npm run check:supabase` to check all four tables without writing. Run `npm run verify:supabase` to insert a uniquely named synthetic device, calibration, four mock frames and a completed test, then fetch the records through a separate Supabase adapter and through the API. The verification records are retained and clearly labeled mock. Only a PASS verifies live writes and reads.
-4. Start the backend and register real devices/calibrations in Supabase. Existing SQLite records are not automatically migrated. Every API read queries Supabase with cache disabled; successful ingestion is acknowledged only after Supabase returns the persisted row. Failed database writes return 503. No local fallback is used.
-
-The publishable key and JWKS URL are not needed for this shared-token prototype. They become relevant when adding Supabase Auth. This implementation has adapter contract tests; live Supabase connectivity and the migration must still be verified in the team's environment. The live check in this build environment failed before writes; a successful live connection is not claimed. Run the verification command from your own machine after applying the migration.
-
-## Deploy for team access
-
-```sh
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-```
-
-Use the generated value as `API_KEY`. Set `NODE_ENV=production`, explicit `CORS_ORIGINS`, and Supabase storage after migration. Production startup rejects missing/short tokens and wildcard browser origins. Host the service on a Node 24 or Docker-capable host with HTTPS. The container respects a platform-provided `PORT`; `/health` is liveness, `/ready` checks database access. Do not put the Supabase secret in an image layer: provide deployment environment variables.
-
-```sh
-# Run these commands from the repository root, one directory above backend/.
-docker build -t drain-monitor .
-docker run --rm -p 8000:8000 --env-file backend/.env drain-monitor
-```
-
-Production requires Supabase, so database records survive API process/container replacement. SQLite is limited to explicit offline development tests. SSE connections are per server process. Run one API instance for this prototype; multiple instances need a shared event bus or database-backed realtime for cross-instance streaming. Production token authentication covers all data with a single role; add per-device credentials and user/tenant authorization before a customer rollout. Rate limiting should be enforced by your hosting proxy before opening ingestion publicly.
-
-## Validation
-
-```sh
-npm run check
-```
-
-Tests exercise HTTP ingestion, retries including concurrent retries, duplicate sequence conflicts, validation, missing echoes, echo conversion, timestamp fallback, source separation, API authentication, CORS, body limits, persistent storage, test timing, inconclusive results, SSE delivery, immutable calibration history, production configuration, static-page serving and Supabase adapter behavior. All four simulator scenarios were also run end to end against the API. The console was syntax checked and its files were tested over HTTP; a browser interaction test could not run because a browser executable was unavailable in the build environment. Hardware measurements and live Supabase migration are separate outstanding integration checks.
-
-Hardware reference: [current team parts list](https://docs.google.com/document/d/1XIAfMKkZk-sJJYISNm_GJHvuB-Wmmrhnhrqttcz_yaE/edit?tab=t.0), reviewed October 22, 2026. It lists two US-100 modules, a HiLetgo ESP-WROOM-32, a 400-point breadboard, M/M and F/M wires, 220Ω resistors, Micro-USB cable and optional PS1240 piezo. References: [US-100 behavior](https://www.adafruit.com/product/4019), [Supabase server keys](https://supabase.com/docs/guides/getting-started/api-keys), [Supabase Data API](https://supabase.com/docs/guides/api/creating-routes).
-
-## Live data and automatic calibration
-
-The device stream accepts `?source=hardware` (default) or `?source=mock`. Authenticated fetch clients receive `connected`, initial/current `snapshot` events, and heartbeat comments. Snapshots contain `{ device, readings, tests }` and query storage every second, including writes from other processes. Existing immediate `reading` events remain available for compatibility and may contain either source. A storage failure emits `unavailable` and closes the connection; clients should reconnect and use the new snapshot. Connections are bounded and cleaned up on disconnect/shutdown.
-
-Automatic empty-fixture calibration is enabled by default. Start empty: still water cannot be identified from stability alone. Five consecutive valid frames spanning at least two seconds, no gap above five seconds, one source/boot/clock, and at most 4 mm variation per sensor qualify. The next consecutive frame persists the median baseline. Automatic baselines are source-specific, survive restarts and never replace an existing applicable manual/automatic baseline. Earlier frames retain their original calibration IDs. Set `AUTO_CALIBRATE=false` to require manual calibration. Existing manual calibration requests remain unchanged; legacy baselines apply to either source. Calibration GET accepts `?source=hardware|mock`.
-
-Manual calibration input now accepts optional `source: "mock" | "hardware"`. New live guided calibration supplies a source, preventing a mock baseline from applying to hardware. Omitting source retains legacy behavior. Live snapshots include up to 120 recent readings for graphs and calibration; REST history retains its existing 1–500 limit. The frontend computes experimental forecasts from persisted calibrated frames; no trained predictive model or volume/flow estimate is claimed.
+Upstream sign-in, fixture ownership/viewer roles and hashed sensor keys are retained. Recording data uses `drain_records`; `dm_devices`, `dm_device_members` and `dm_device_keys` remain access-control metadata. Apply `supabase/migrations/202610270002_records_access.sql` after the drain_records migration, including on new projects. Existing ownership/key rows are retained. Enable browser sign-in with `NEXT_PUBLIC_SUPABASE_URL` and a publishable `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; never expose the server secret. Registered users see only their fixtures and may manage them only as owners. Sensor keys can only append to physical-sensor recordings for their fixture; owners initiate recordings. The existing unauthenticated local-prototype mode remains only when API_KEY is unset. Do not expose that mode publicly.

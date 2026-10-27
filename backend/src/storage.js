@@ -2,10 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ApiError } from './validation.js';
+import { attachCalibration, fixtureCalibrations } from './fixture-calibration.js';
 
 const tables = {
   devices: { key: 'device_id', columns: ['device_id', 'created_at'] },
-  calibrations: { key: 'id', columns: ['id', 'device_id', 'created_at'] },
   readings: { key: 'event_id', columns: ['event_id', 'device_id', 'boot_id', 'sequence', 'source', 'measured_at', 'received_at'] },
   sessions: { key: 'id', columns: ['id', 'device_id', 'source', 'status', 'started_at'] },
   device_members: { key: 'id', columns: ['id', 'device_id', 'user_id', 'role', 'created_at'] },
@@ -25,14 +25,26 @@ function filterParts(filters) {
 function storageError() { return new ApiError(503, 'storage_unavailable', 'Storage unavailable. Check server configuration, connectivity and database migration.'); }
 function conflict() { return new ApiError(409, 'conflict', 'Record already exists, sequence was reused, or a session is already active'); }
 
-export class SQLiteStore {
+class FixtureCalibrationStore {
+  async listCalibrations(deviceId) { return fixtureCalibrations(await this.get('devices', deviceId)); }
+  async getCalibration(deviceId, id) { return (await this.listCalibrations(deviceId)).find(cal => cal.id === id) ?? null; }
+  async saveCalibration(value, options = {}) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const previous = await this.get('devices', value.device_id);
+      const next = attachCalibration(previous, value, options);
+      if (next === previous || await this.compareAndSetDevice(previous, next)) return value;
+    }
+    throw new ApiError(409, 'fixture_changed', 'Fixture changed concurrently; retry calibration');
+  }
+}
+
+export class SQLiteStore extends FixtureCalibrationStore {
   constructor(path) {
+    super();
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS dm_devices (device_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS dm_calibrations (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), created_at TEXT NOT NULL, payload TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS dm_calibration_device ON dm_calibrations(device_id, created_at DESC);
       CREATE TABLE IF NOT EXISTS dm_readings (event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), boot_id TEXT NOT NULL, sequence INTEGER NOT NULL, source TEXT NOT NULL, measured_at TEXT NOT NULL, received_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(device_id, boot_id, sequence));
       CREATE INDEX IF NOT EXISTS dm_readings_device_time ON dm_readings(device_id, source, measured_at DESC);
       CREATE TABLE IF NOT EXISTS dm_sessions (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), source TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, payload TEXT NOT NULL);
@@ -41,6 +53,26 @@ export class SQLiteStore {
       CREATE INDEX IF NOT EXISTS dm_device_members_user ON dm_device_members(user_id);
       CREATE TABLE IF NOT EXISTS dm_device_keys (key_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES dm_devices(device_id), created_at TEXT NOT NULL, payload TEXT NOT NULL);
     `);
+    this.migrateLegacyCalibrations();
+  }
+  migrateLegacyCalibrations() {
+    if (!this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='dm_calibrations'").get()) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.db.prepare('SELECT payload FROM dm_calibrations').all();
+      for (const row of rows) {
+        const cal = JSON.parse(row.payload);
+        const previous = this.db.prepare('SELECT payload FROM dm_devices WHERE device_id = ?').get(cal.device_id);
+        const fixture = previous ? JSON.parse(previous.payload) : null;
+        const next = attachCalibration(fixture, cal, { migrating: true });
+        this.db.prepare('UPDATE dm_devices SET payload = ? WHERE device_id = ?').run(JSON.stringify(next), cal.device_id);
+      }
+      this.db.exec('DROP TABLE dm_calibrations; COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  async compareAndSetDevice(previous, next) {
+    return this.db.prepare('UPDATE dm_devices SET payload = ? WHERE device_id = ? AND payload = ?')
+      .run(JSON.stringify(next), previous.device_id, JSON.stringify(previous)).changes === 1;
   }
   async ready() { this.db.prepare('SELECT 1 FROM dm_devices LIMIT 1').all(); }
   async get(table, id) {
@@ -75,8 +107,8 @@ export class SQLiteStore {
   async close() { this.db.close(); }
 }
 
-export class SupabaseStore {
-  constructor(url, key, fetcher = fetch) { this.url = url; this.key = key; this.fetcher = fetcher; }
+export class SupabaseStore extends FixtureCalibrationStore {
+  constructor(url, key, fetcher = fetch) { super(); this.url = url; this.key = key; this.fetcher = fetcher; }
   async request(path, options = {}, withMetadata = false) {
     let response;
     try {
@@ -92,6 +124,12 @@ export class SupabaseStore {
       const rows = await response.json();
       return withMetadata ? { rows, range: response.headers.get('content-range') } : rows;
     } catch { throw storageError(); }
+  }
+  async compareAndSetDevice(previous, next) {
+    const query = new URLSearchParams({ device_id: `eq.${previous.device_id}`, payload: `eq.${JSON.stringify(previous)}` });
+    const rows = await this.request(`dm_devices?${query}`, { method: 'PATCH', body: JSON.stringify({ payload: next }) });
+    if (rows.length > 1 || (rows.length === 1 && rows[0]?.payload?.device_id !== next.device_id)) throw storageError();
+    return rows.length === 1;
   }
   async ready() {
     await Promise.all(Object.entries(tables).map(([table, spec]) => this.request(`dm_${table}?select=${spec.key}&limit=1`)));
