@@ -37,7 +37,7 @@ Terminal 2:
 npm --prefix web run dev
 ```
 
-Open **http://localhost:3000**; it redirects to `/insights`. Default fixture: `practice-sink-v2`, data source: Simulation. Select a recording and use Replay. Both normal and unreliable-data scenarios are available. The browser reads through a same-origin gateway; set server-side `BACKEND_URL` in `web/.env.local` if the backend runs elsewhere. The old `NEXT_PUBLIC_BACKEND_URL` is no longer used.
+Open **http://localhost:3000** for the Smart Housing landing page, or **http://localhost:3000/insights** for the dashboard. Default fixture: `practice-sink-v2`, data source: Simulation. Select a recording and use Replay. Both normal and unreliable-data scenarios are available. The browser reads through a same-origin gateway; set server-side `BACKEND_URL` in `web/.env.local` if the backend runs elsewhere. The old `NEXT_PUBLIC_BACKEND_URL` is no longer used.
 
 If backend `API_KEY` is set, enter that separate prototype token in the site's token form. Supabase server secrets belong only in the backend. `NODE_ENV=production` requires Supabase, an API token of at least 32 characters and explicit CORS origins. This remains a shared-token prototype, with owner/viewer access when using Supabase sign-in.
 
