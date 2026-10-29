@@ -1,6 +1,6 @@
 # Drain Monitor web
 
-Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page redirects to `/insights`. Existing fonts and scoped chart styling are retained.
+Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page renders the Smart Housing landing page from the Figma “Home – Low-fi” frame (`76:787`). The existing dashboard remains at `/insights`. The landing page uses scoped CSS Modules, Inter, and direct exports of the original Figma illustration layers in `public/images/marketing/`. Booking, test-rig, pricing, and heat-map links currently return to `/` until destinations are supplied; Live demo and Log in open the existing dashboard.
 
 The dashboard uses the single-table records API. Choose a fixture ID (default `practice-sink-v2`) and Simulation or Physical sensors, then select a recording. Replay requests historical computations from the backend; the browser does not calculate calibration, drainage outcomes or forecasts. Active recordings refresh automatically. Finished records can be replayed without treating archived points as live hardware.
 
