@@ -20,9 +20,9 @@ function NavigationLinks() {
   return <>
     <a href="#how-it-works">How it works</a>
     <a href="#for-hotels">For hotels</a>
-    <a href="/insights">Live demo</a>
+    <a href="/dashboard">Live demo</a>
     <a href="/">Pricing</a>
-    <a href="/insights" className={styles.login}>Log in</a>
+    <a href="/login" className={styles.login}>Log in</a>
     <a href="/" className={styles.primary}>Book a demo</a>
   </>;
 }

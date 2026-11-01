@@ -1,6 +1,6 @@
 # Drain Monitor web
 
-Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page renders the Smart Housing landing page from the Figma “Home – Low-fi” frame (`76:787`). The existing dashboard remains at `/insights`. The landing page uses scoped CSS Modules, Inter, and direct exports of the original Figma illustration layers in `public/images/marketing/`. Booking, test-rig, pricing, and heat-map links currently return to `/` until destinations are supplied; Live demo and Log in open the existing dashboard.
+Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page renders the Smart Housing landing page from the Figma “Home – Low-fi” frame (`76:787`). The dashboard is at `/dashboard`, and sign-in is at `/login`. The old `/insights` URL redirects to `/dashboard`. The landing page uses scoped CSS Modules, Inter, and direct exports of the original Figma illustration layers in `public/images/marketing/`. Booking, test-rig, pricing, and heat-map links currently return to `/` until destinations are supplied; Live demo opens `/dashboard`; Log in opens `/login`.
 
 The dashboard uses the single-table records API. Choose a fixture ID (default `practice-sink-v2`) and Simulation or Physical sensors, then select a recording. Replay requests historical computations from the backend; the browser does not calculate calibration, drainage outcomes or forecasts. Active recordings refresh automatically. Finished records can be replayed without treating archived points as live hardware.
 
@@ -13,3 +13,17 @@ Recording controls can start confirmed-empty calibration, drainage and monitorin
 Run `npm run typecheck` and `npm run build` locally. Existing Google fonts require network access during the production build.
 
 The upstream account panel remains available for sign-in, account creation, fixture registration and one-time sensor-key issuance. Owners can manage recordings; viewers can only read. Sensor keys are for measurement uploads, not browser browsing.
+
+## Frontend folders and routes
+
+- `app/page.tsx`: `/`, the public home page.
+- `app/dashboard/page.tsx`: `/dashboard`, drainage recordings, replay, and controls.
+- `app/login/page.tsx`: `/login`, the existing sign-in and account interface.
+- `app/insights/page.tsx`: compatibility redirect to `/dashboard`.
+- `app/drains/[id]/page.tsx`: the existing drain-detail placeholder.
+- `app/api/`: server-side gateways; these URLs are unchanged.
+- `components/`: reusable interface pieces, including the account panel.
+- `lib/`: API client and Supabase authentication.
+- `public/images/marketing/`: original home-page artwork.
+
+Page-specific styles stay beside their page as `page.module.css`. Global styles and the root layout stay in `app/`.
