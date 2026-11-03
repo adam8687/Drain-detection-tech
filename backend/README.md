@@ -38,7 +38,7 @@ Empty calibration auto-finishes after at least 20 valid stable paired samples sp
 ### Retrieve, replay and finish
 
 - `GET /api/v1/records`: summary list, optional `fixture_id`, `data_source`, `record_type`, `recording_status`, `limit` (1–200).
-- `GET /api/v1/records/{id}`: `{ record, computed }`. `computed` contains backend forecast, countdown timeline, sample count, staleness and calibration progress.
+- `GET /api/v1/records/{id}`: `{ record, computed }`. `computed` contains backend forecast, countdown timeline, sample count, staleness and calibration progress. It also includes `water_levels`: calibrated paired sensor depths in millimeters, elapsed seconds from the first reading, and `gap_before` markers for gaps beyond the backend limit. Missing calibration or invalid paired measurements yield null depths; replay returns only the visible prefix.
 - Add `?sample=20` to replay only the observations available through that sample. No future measurements are used for its estimate.
 - `POST /api/v1/records/{id}/finish`: finish and persist the result; safe to repeat.
 - `GET /api/v1/records/{id}/stream`: authenticated fetch SSE, with connected/snapshot/unavailable events and heartbeats. It polls persistent storage and sees external writers. The frontend currently uses REST polling for active recordings.

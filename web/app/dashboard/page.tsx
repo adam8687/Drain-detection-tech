@@ -76,6 +76,7 @@ export default function DashboardPage() {
     </div>
     {!records.length && !error && <p>No recordings. Run <code>npm run seed:practice</code> for saved examples, or start a recording below.</p>}
     {view && <>
+      <a href={`/live-demo?fixture=${encodeURIComponent(fixture)}&record=${encodeURIComponent(view.record.record_id)}&source=${source}`}>Open live view →</a>
       <div className={styles.badge}>{source === 'simulation' ? 'Simulated sensor data' : 'Physical sensor data'} · {active ? 'Live recording' : 'Saved recording'}</div>
       <div className={styles.metrics}>
         <div><span>Time left to drain</span><strong>{view.computed.forecast.state === 'forecast' ? `About ${Math.ceil(view.computed.forecast.seconds_remaining!)} seconds` : view.computed.forecast.state === 'dry' ? 'No measurable water' : 'Estimate unavailable'}</strong></div>
@@ -85,6 +86,7 @@ export default function DashboardPage() {
       <p className={styles.explanation} role="status">{view.record.record_type === 'calibration' ? view.computed.calibration_message : view.computed.forecast.message}</p>
       {view.record.record_type === 'calibration' && active && <progress max="1" value={view.computed.calibration_progress ?? 0} aria-label="Calibration progress" />}
       <figure className={styles.chart}><figcaption><h3>Estimated time left to drain</h3><p>Calculated by the backend. Gaps mean an estimate was unavailable.</p></figcaption>
+        <p className={styles.chartHint}>Swipe horizontally to explore the chart.</p>
         <svg viewBox="0 0 700 280" role="img" aria-label="Estimated seconds remaining against elapsed seconds">
           {[0,1,2,3,4].map(i => <g key={i}><line x1="60" x2="650" y1={220 - i * 45} y2={220 - i * 45} stroke="currentColor" opacity=".12" /><text x="50" y={224 - i * 45} textAnchor="end" fill="currentColor" fontSize="12">{Math.round(maxY * i / 4)}</text><text x={60 + i * 147.5} y="244" textAnchor="middle" fill="currentColor" fontSize="12">{Math.round(maxX * i / 4)}</text></g>)}
           <text x="60" y="20" fill="currentColor" fontSize="12">Seconds remaining</text><path d={path} fill="none" stroke="#2563eb" strokeWidth="2.5" /><text x="350" y="272" textAnchor="middle" fill="currentColor" fontSize="12">Elapsed seconds</text>

@@ -125,9 +125,14 @@ export function computedView(record, sample = null) {
   const result = forecast(visible, record.calibration, stale && sample === null);
   const first = rows[0]?.timestamp;
   const timeline = visible.map((p, i) => ({ elapsed_seconds: (Date.parse(p.timestamp) - Date.parse(first)) / 1000, seconds_remaining: forecast(visible.slice(Math.max(0, i - 7), i + 1), record.calibration).seconds_remaining }));
+  const water_levels = visible.map((point, index) => {
+    const values = depths(point, record.calibration);
+    const gap_before = index > 0 && Date.parse(point.timestamp) - Date.parse(visible[index - 1].timestamp) > SETTINGS.maxGap;
+    return { elapsed_seconds: (Date.parse(point.timestamp) - Date.parse(first)) / 1000, sensor_a_mm: values?.[0] ?? null, sensor_b_mm: values?.[1] ?? null, gap_before };
+  });
   if (stale && sample === null && timeline.length) timeline.at(-1).seconds_remaining = null;
   const learning = record.record_type === 'calibration' ? learnCalibration(visible) : null;
-  return { forecast: result, timeline, sample_index: Math.max(0, position), sample_count: rows.length, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
+  return { forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
 }
 export function appendMeasurement(record, point) {
   const existing = record.measurements.find(p => p.reading_id === point.reading_id);

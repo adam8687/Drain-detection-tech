@@ -1,6 +1,6 @@
 # Drain Monitor web
 
-Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page renders the Smart Housing landing page from the Figma “Home – Low-fi” frame (`76:787`). The dashboard is at `/dashboard`, and sign-in is at `/login`. The old `/insights` URL redirects to `/dashboard`. The landing page uses scoped CSS Modules, Inter, and direct exports of the original Figma illustration layers in `public/images/marketing/`. Booking, test-rig, pricing, and heat-map links currently return to `/` until destinations are supplied; Live demo opens `/dashboard`; Log in opens `/login`.
+Node.js 24+. Run `npm ci` and `npm run dev` in this folder. The root page renders the Smart Housing landing page from the Figma “Home – Low-fi” frame (`76:787`). The dashboard is at `/dashboard`, and sign-in is at `/login`. The old `/insights` URL redirects to `/dashboard`. The landing page uses scoped CSS Modules, Inter, and direct exports of the original Figma illustration layers in `public/images/marketing/`. Booking, test-rig, pricing, and heat-map links currently return to `/` until destinations are supplied; Live demo opens `/live-demo`; Log in opens `/login`.
 
 The dashboard uses the single-table records API. Choose a fixture ID (default `practice-sink-v2`) and Simulation or Physical sensors, then select a recording. Replay requests historical computations from the backend; the browser does not calculate calibration, drainage outcomes or forecasts. Active recordings refresh automatically. Finished records can be replayed without treating archived points as live hardware.
 
@@ -19,6 +19,7 @@ The upstream account panel remains available for sign-in, account creation, fixt
 - `app/page.tsx`: `/`, the public home page.
 - `app/dashboard/page.tsx`: `/dashboard`, drainage recordings, replay, and controls.
 - `app/login/page.tsx`: `/login`, the existing sign-in and account interface.
+- `app/live-demo/`: `/live-demo`, the responsive Figma Live View connected to existing recordings.
 - `app/insights/page.tsx`: compatibility redirect to `/dashboard`.
 - `app/drains/[id]/page.tsx`: the existing drain-detail placeholder.
 - `app/api/`: server-side gateways; these URLs are unchanged.
@@ -27,3 +28,13 @@ The upstream account panel remains available for sign-in, account creation, fixt
 - `public/images/marketing/`: original home-page artwork.
 
 Page-specific styles stay beside their page as `page.module.css`. Global styles and the root layout stay in `app/`.
+
+## Live View
+
+`/live-demo` defaults to Physical sensors. Choose a fixture and recording, or explicitly switch to Simulation recordings to inspect existing simulated records. Active recordings refresh every 1.5 seconds. Saved recordings remain labeled as saved; no sample values replace unavailable data. The 7/30/90-day chart plots completed drainage durations by recording start date within the latest 200 source-specific summaries. Registry names are optional: if that endpoint is unavailable, accessible recordings remain selectable by fixture ID.
+
+The water-level chart uses `computed.water_levels` from the updated backend, including backend-defined measurement-gap markers. It plots calibrated depths for sensors A and B against actual elapsed seconds. Restart the backend after updating this checkout. Existing API authentication and ownership checks remain in effect. Links from Recording controls include `fixture`, `record`, and `source` query parameters.
+
+The tube and sink are original Figma illustrations, not live hardware diagrams. Learned normal-drain baselines, room/floor metadata, alert management, heat-map navigation, and work orders are not supplied by the current recording API. Their unavailable states are explicit; no prototype action writes fabricated events.
+
+The shared mobile navigation uses a three-line disclosure button with Escape, outside-tap, and link-selection dismissal. Account forms, recording controls, and Live View use mobile touch targets and stack on narrow screens.

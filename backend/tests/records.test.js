@@ -61,6 +61,21 @@ test('server forecasts refuse stale, invalid and rising values; replay never use
   const prefix = computedView(record({ measurements: points.slice(0, 9), recording_status: 'finished' }));
   assert.deepEqual(full.timeline, prefix.timeline);
 });
+test('water-level timeline uses calibrated paired readings, actual timestamps and replay boundaries', () => {
+  const start = Date.now() - 60000;
+  const samples = [point(start, 300), point(start + 1500, 320), point(start + 9000, 350)];
+  samples[2].sensor_b = { status: 'timeout', distance_mm: null };
+  const stored = record({ measurements: [...samples].reverse(), recording_status: 'finished' });
+  const levels = computedView(stored).water_levels;
+  assert.deepEqual(levels, [
+    { elapsed_seconds: 0, sensor_a_mm: calibration.sensor_a_empty_mm - 300, sensor_b_mm: calibration.sensor_b_empty_mm - 320, gap_before: false },
+    { elapsed_seconds: 1.5, sensor_a_mm: calibration.sensor_a_empty_mm - 320, sensor_b_mm: calibration.sensor_b_empty_mm - 340, gap_before: false },
+    { elapsed_seconds: 9, sensor_a_mm: null, sensor_b_mm: null, gap_before: true },
+  ]);
+  assert.deepEqual(computedView(stored, 1).water_levels, levels.slice(0, 2));
+  assert.ok(computedView({ ...stored, calibration: null }).water_levels.every(p => p.sensor_a_mm === null && p.sensor_b_mm === null));
+  assert.deepEqual(computedView(record({ measurements: [] })).water_levels, []);
+});
 test('single-table storage enforces one active recording and preserves unrelated sources', async t => {
   const store = new SQLiteRecordStore(':memory:'); t.after(() => store.close());
   const row = record({}); await store.insert(row);

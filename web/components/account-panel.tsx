@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { DrainApi, DrainApiError } from '../lib/api';
 import { supabase, useSession } from '../lib/supabase';
+import styles from './account-panel.module.css';
 
 const baseUrl = '/api/backend';
 
@@ -15,10 +16,10 @@ export default function AccountPanel() {
   const [name, setName] = useState('');
   const [newKey, setNewKey] = useState<{ device_id: string; key: string } | null>(null);
 
-  if (!supabase) return <p>Sign-in is off. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in web/.env.local.</p>;
+  if (!supabase) return <p className={styles.panel}>Sign-in is off. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in web/.env.local.</p>;
   const auth = supabase.auth;
 
-  if (!session) return <section aria-label="Account">
+  if (!session) return <section className={styles.panel} aria-label="Account">
     <h2>Sign in</h2>
     <form onSubmit={async event => {
       event.preventDefault();
@@ -36,7 +37,7 @@ export default function AccountPanel() {
     {message && <p role="alert">{message}</p>}
   </section>;
 
-  return <section aria-label="Account">
+  return <section className={styles.panel} aria-label="Account">
     <p>Signed in as {session.user.email}.{' '}<button type="button" onClick={() => { setNewKey(null); void auth.signOut(); }}>Sign out</button></p>
     <details>
       <summary>Add a sensor</summary>
