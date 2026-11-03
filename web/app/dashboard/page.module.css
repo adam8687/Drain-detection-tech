@@ -41,3 +41,29 @@
 .tableScroll table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
 .tableScroll th, .tableScroll td { text-align: left; padding: 10px; border-bottom: 1px solid #8884; }
 @media (max-width: 620px) { .metrics { grid-template-columns: 1fr; } .chart { padding: 14px; } .shell { padding: 24px 16px 48px; } }
+
+.shell { min-width: 0; overflow-wrap: anywhere; }
+.controls label { min-width: 0; max-width: 100%; }
+.controls select, .controls input, .controls button { min-height: 44px; max-width: 100%; }
+.controls select { min-width: 0; text-overflow: ellipsis; }
+.controls input[type="checkbox"] { min-height: 24px; width: 24px; flex-shrink: 0; }
+.shell input:focus-visible, .shell select:focus-visible, .shell button:focus-visible, .shell a:focus-visible { outline: 3px solid var(--color-text-secondary); outline-offset: 3px; }
+@media (max-width: 620px) {
+  .controls { padding: 16px; gap: 12px; align-items: stretch; }
+  .controls label { flex: 1 1 100%; align-items: flex-start; }
+  .controls label:has(input[type="checkbox"]) { align-items: center; }
+  .controls select { width: 100%; font-size: 16px; }
+  .controls input:not([type="checkbox"]) { max-width: 100%; width: 100%; font-size: 16px; }
+  .controls > button { width: 100%; }
+  .barRow { grid-template-columns: 44px minmax(0, 1fr) 88px; gap: 8px; }
+  .chart summary { min-height: 44px; }
+}
+.chartHint { display: none; }
+@media (max-width: 620px) {
+  .chart:has(svg) { overflow-x: auto; }
+  .chart svg { min-width: 500px; }
+  .chart svg text { font-size: 16px; }
+  .chartHint { display: block; }
+}
+
+@media (max-width: 620px) { .barRow > .status { grid-column: 2 / -1; } }

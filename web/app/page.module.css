@@ -73,7 +73,6 @@
 .dropletBackdrop { width: 320px; height: 320px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #e6e9ed; }
 .dropletBackdrop img { display: block; }
 .footer { padding: 32px; background: var(--water); text-align: center; font-size: 12px; color: var(--muted); line-height: 15px; }
-.mobileMenu { display: none; }
 .skipLink { position: absolute; top: 8px; left: 8px; z-index: 10; padding: 12px; background: white; transform: translateY(-200%); }
 .skipLink:focus { transform: translateY(0); }
 
@@ -110,9 +109,6 @@
 @media (max-width: 900px) {
   .navigation { display: none; }
   .header { justify-content: space-between; }
-  .mobileMenu { display: block; position: relative; font-size: 14px; }
-  .mobileMenu summary { cursor: pointer; padding: 12px; }
-  .mobileMenu nav { position: absolute; right: 0; top: 48px; z-index: 5; width: 220px; padding: 16px; display: flex; flex-direction: column; gap: 16px; background: white; border: 1px solid var(--border); border-radius: 12px; }
   .hero { flex-direction: column; align-items: flex-start; padding-top: 48px; }
   .heroCopy { flex: auto; max-width: 540px; }
   .heroVisual { flex: none; align-self: center; width: 620px; max-width: 100%; height: auto; aspect-ratio: 620 / 660; container-type: inline-size; }
@@ -142,4 +138,12 @@
   .ctaPanel { padding: 28px 24px; gap: 32px; }
   .dropletBackdrop { width: 220px; height: 220px; }
   .dropletBackdrop img { transform: scale(.7); }
+}
+
+@media (max-width: 640px) {
+  .heroVisual { aspect-ratio: auto; }
+  .heroCanvas { width: 100%; height: auto; transform: none; }
+  .pipe { width: 100%; height: auto; }
+  .alert { position: relative; top: auto; left: auto; width: calc(100% - 24px); margin: -48px auto 12px; padding: 16px; }
+  .page .primary, .page .secondary { min-height: 44px; }
 }

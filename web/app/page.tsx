@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import styles from './page.module.css';
+import MobileMenu from '../components/mobile-menu';
 
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
 const artwork = '/images/marketing/';
@@ -20,7 +21,7 @@ function NavigationLinks() {
   return <>
     <a href="#how-it-works">How it works</a>
     <a href="#for-hotels">For hotels</a>
-    <a href="/dashboard">Live demo</a>
+    <a href="/live-demo">Live demo</a>
     <a href="/">Pricing</a>
     <a href="/login" className={styles.login}>Log in</a>
     <a href="/" className={styles.primary}>Book a demo</a>
@@ -42,10 +43,7 @@ export default function Home() {
         <span>Company Name</span>
       </a>
       <nav className={styles.navigation} aria-label="Main navigation"><NavigationLinks /></nav>
-      <details className={styles.mobileMenu}>
-        <summary>Menu</summary>
-        <nav aria-label="Mobile navigation"><NavigationLinks /></nav>
-      </details>
+      <MobileMenu><NavigationLinks /></MobileMenu>
     </header>
 
     <main id="main">

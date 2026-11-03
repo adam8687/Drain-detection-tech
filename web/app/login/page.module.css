@@ -13,3 +13,10 @@
 .page form { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .page label { display: flex; flex-direction: column; gap: 4px; }
 .page input, .page button { font: inherit; padding: 8px; }
+.page { overflow-wrap: anywhere; }
+.page label { min-width: 0; max-width: 100%; }
+.page input, .page button { min-height: 44px; max-width: 100%; }
+@media (max-width: 620px) {
+  .page { padding: 24px 16px; }
+  .page input { font-size: 16px; }
+}
