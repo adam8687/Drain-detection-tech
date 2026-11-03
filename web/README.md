@@ -35,6 +35,6 @@ Page-specific styles stay beside their page as `page.module.css`. Global styles 
 
 The water-level chart uses `computed.water_levels` from the updated backend, including backend-defined measurement-gap markers. It plots calibrated depths for sensors A and B against actual elapsed seconds. Restart the backend after updating this checkout. Existing API authentication and ownership checks remain in effect. Links from Recording controls include `fixture`, `record`, and `source` query parameters.
 
-The tube and sink are original Figma illustrations, not live hardware diagrams. Learned normal-drain baselines, room/floor metadata, alert management, heat-map navigation, and work orders are not supplied by the current recording API. Their unavailable states are explicit; no prototype action writes fabricated events.
+The tube and sink are original Figma illustrations, not live hardware diagrams. Drain status and baseline seconds use the backend’s drainage-status analysis when present. Baselines use early completed durations and do not normalize starting water level. Room/floor metadata, alert management, heat-map navigation, and work orders are not supplied by the current recording API. Their unavailable states are explicit; no prototype action writes fabricated events.
 
 The shared mobile navigation uses a three-line disclosure button with Escape, outside-tap, and link-selection dismissal. Account forms, recording controls, and Live View use mobile touch targets and stack on narrow screens.

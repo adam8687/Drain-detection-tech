@@ -4,10 +4,12 @@ export interface Calibration { sensor_a_empty_mm: number; sensor_b_empty_mm: num
 export interface SensorReading { distance_mm: number | null; status: 'ok' | 'timeout' | 'out_of_range' }
 export interface Measurement { reading_id: string; timestamp: string; sensor_a: SensorReading; sensor_b: SensorReading }
 export interface DrainResult { drainage_time_seconds: number | null; outcome: 'completed' | 'incomplete' | 'uncertain' }
-export interface RecordSummary { record_id: string; fixture_id: string; record_type: RecordType; data_source: DataSource; recording_status: 'recording' | 'finished'; calibration: Calibration | null; result: DrainResult | null; created_at: string; measurement_count: number }
-export interface DrainRecord extends Omit<RecordSummary, 'measurement_count'> { measurements: Measurement[] }
+export type DrainStatusLabel = 'learning' | 'unknown' | 'in_progress' | 'normal' | 'slow_drain' | 'running_too_long';
+export interface DrainStatus { status: DrainStatusLabel; baseline_seconds: number | null; ratio: number | null }
+export interface RecordSummary { record_id: string; fixture_id: string; record_type: RecordType; data_source: DataSource; recording_status: 'recording' | 'finished'; calibration: Calibration | null; result: DrainResult | null; created_at: string; measurement_count: number; drain_status: DrainStatus | null }
+export interface DrainRecord extends Omit<RecordSummary, 'measurement_count' | 'drain_status'> { measurements: Measurement[] }
 export interface WaterLevelPoint { elapsed_seconds: number; sensor_a_mm: number | null; sensor_b_mm: number | null; gap_before: boolean }
-export interface RecordView { record: DrainRecord; computed: { forecast: { state: 'forecast' | 'dry' | 'unavailable'; seconds_remaining: number | null; message: string }; timeline: { elapsed_seconds: number; seconds_remaining: number | null }[]; water_levels?: WaterLevelPoint[]; sample_index: number; sample_count: number; elapsed_seconds: number; stale: boolean; calibration_progress: number | null; calibration_message: string | null } }
+export interface RecordView { record: DrainRecord; computed: { forecast: { state: 'forecast' | 'dry' | 'unavailable'; seconds_remaining: number | null; message: string }; timeline: { elapsed_seconds: number; seconds_remaining: number | null }[]; water_levels?: WaterLevelPoint[]; sample_index: number; sample_count: number; elapsed_seconds: number; stale: boolean; calibration_progress: number | null; calibration_message: string | null; drain_status: DrainStatus | null } }
 export class DrainApiError extends Error { status: number; code: string; constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; } }
 export class DrainApi {
   baseUrl: string; token: string; fetcher: typeof fetch;

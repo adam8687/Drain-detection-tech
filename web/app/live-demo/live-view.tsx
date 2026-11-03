@@ -8,6 +8,7 @@ import { HistoryChart, WaterLevelChart } from './charts';
 import styles from './page.module.css';
 
 const artwork = '/images/live-view/';
+const statusLabels = { learning: 'Learning baseline', unknown: 'Status unavailable', in_progress: 'Draining', normal: 'Normal', slow_drain: 'Slow drain', running_too_long: 'Running too long' };
 const date = (value: string) => new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 export default function LiveView({ initialFixture = '', initialRecord = '', initialSource = 'sensor' }: { initialFixture?: string; initialRecord?: string; initialSource?: DataSource }) {
@@ -23,7 +24,9 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
   const firstLevel = levels.find(p => p.sensor_a_mm !== null);
   const duration = view?.record.result?.drainage_time_seconds;
   const active = view?.record.recording_status === 'recording';
-  const status = !view ? 'No recording' : active ? view.computed.stale ? 'Waiting for data' : 'Recording' : view.record.result?.outcome || 'Saved recording';
+  const drainStatus = view?.computed.drain_status;
+  const baseline = drainStatus?.baseline_seconds;
+  const status = !view ? 'No recording' : active && view.computed.stale ? 'Waiting for data' : drainStatus ? statusLabels[drainStatus.status] : active ? 'Recording' : view.record.result?.outcome || 'Saved recording';
   const statusMessage = view?.record.record_type === 'calibration' ? view.computed.calibration_message : view?.computed.forecast.message;
   const fixtureMatches = data.fixtures.filter(f => `${f.name} ${f.id}`.toLowerCase().includes(query.toLowerCase()));
 
@@ -90,8 +93,8 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
                 <p className={styles.caption}>Drain time</p>
                 <p className={styles.duration}><strong style={duration != null && duration.toFixed(1).length >= 5 ? { fontSize: 36 } : undefined}>{duration != null ? duration.toFixed(1) : '—'}</strong><span>s</span></p>
                 <p className={styles.result}>{duration != null ? 'Measured drainage duration' : active ? 'Test in progress' : view?.record.result?.outcome || 'Result unavailable'}</p>
-                <p className={styles.normal}>Normal baseline unavailable</p>
-                <p className={styles.caption}>A learned normal-drain comparison has not been established.</p>
+                <p className={styles.normal}>{baseline != null ? `Baseline ${baseline.toFixed(1)} s` : 'Normal baseline unavailable'}</p>
+                <p className={styles.caption}>{baseline != null ? 'Baseline uses the earliest completed drains; starting water level is not normalized.' : 'Needs three completed drains to establish a baseline.'}</p>
               </div>
               {hasLevels ? <WaterLevelChart points={levels} /> : <div className={styles.emptyWater}><p className={styles.caption}>Water level</p><p>{data.loading ? 'Loading measurements…' : 'Calibrated water-level measurements are not available for this recording.'}</p></div>}
             </div>
@@ -117,6 +120,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
             <h2 id="details-title">Recording details</h2>
             <p className={styles.description}>These values come from the selected recording. A completed test alone does not establish a blockage or slowdown alert.</p>
             <dl className={styles.metrics}>
+              <div><dt>Drain status</dt><dd>{drainStatus ? statusLabels[drainStatus.status] : '—'}</dd></div>
               <div><dt>Recording type</dt><dd>{view?.record.record_type || '—'}</dd></div>
               <div><dt>Measurements</dt><dd>{view?.computed.sample_count ?? '—'}</dd></div>
               <div><dt>Empty calibration</dt><dd>{view ? view.record.calibration ? 'Available' : 'Not available' : '—'}</dd></div>

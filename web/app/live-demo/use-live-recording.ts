@@ -63,7 +63,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
         if (controller.signal.aborted) return;
         setView(next); setError(''); setNeedsAuth(false); setLoadingRecord(false);
         setRecords(previous => previous.map(record => record.record_id === recordId
-          ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.record.measurements.length, calibration: next.record.calibration }
+          ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.record.measurements.length, calibration: next.record.calibration, drain_status: next.computed.drain_status }
           : record));
         if (next.record.recording_status === 'recording') timer = setTimeout(() => void load(), 1500);
       } catch (err) {

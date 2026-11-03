@@ -7,7 +7,7 @@ import { createRecordStore } from './records-storage.js';
 import { createStore as createAccessStore } from './storage.js';
 import { DEVICE_KEY_PREFIX, hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
-import { validateRecordInput, validateMeasurement, appendMeasurement, analyzeDrainage, computedView, fail } from './records-domain.js';
+import { validateRecordInput, validateMeasurement, appendMeasurement, analyzeDrainage, computedView, drainStatuses, fail } from './records-domain.js';
 
 const sameToken = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
 async function body(req) {
@@ -55,6 +55,7 @@ export function createApp(config, store = createRecordStore(config), {
     }
     throw new ApiError(409, 'concurrent_update', 'Recording is busy; retry using the same reading_id');
   };
+  const summaries = rows => { const statuses = drainStatuses(rows); return rows.map(row => ({ ...summary(row), drain_status: statuses.get(row.record_id) ?? null })); };
   const summary = row => ({ record_id: row.record_id, fixture_id: row.fixture_id, record_type: row.record_type, data_source: row.data_source, recording_status: row.recording_status, calibration: row.calibration, result: row.result, created_at: row.created_at, measurement_count: row.measurements.length });
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID(); res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Request-ID', requestId); res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -106,9 +107,9 @@ export function createApp(config, store = createRecordStore(config), {
           if (who.userId && !filters.fixture_id) {
             const memberships = await accessStore.list('device_members', { user_id: who.userId }, 100);
             const lists = await Promise.all(memberships.map(m => store.list({ ...filters, fixture_id: m.device_id }, limit)));
-            return json(200, { records: lists.flat().sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,limit).map(summary) });
+            return json(200, { records: summaries(lists.flat().sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,limit)) });
           }
-          return json(200, { records: (await store.list(filters, limit)).map(summary) });
+          return json(200, { records: summaries(await store.list(filters, limit)) });
         }
         if (req.method === 'POST') {
           const input = validateRecordInput(await body(req));
@@ -127,7 +128,9 @@ export function createApp(config, store = createRecordStore(config), {
           const record = await get(id), rawSample = url.searchParams.get('sample'), sample = rawSample === null ? null : Number(rawSample);
           if (sample !== null && (!Number.isInteger(sample) || sample < 0)) fail('sample must be a nonnegative integer');
           await requireAccess(who, record.fixture_id);
-          return json(200, { record, computed: computedView(record, sample) });
+          const siblings = record.record_type === 'drainage' ? await store.list({ fixture_id: record.fixture_id, data_source: record.data_source, record_type: 'drainage' }, 200) : [];
+          const drain_status = drainStatuses([...siblings.filter(r => r.record_id !== record.record_id), record]).get(record.record_id) ?? null;
+          return json(200, { record, computed: { ...computedView(record, sample), drain_status } });
         }
         if (action === 'measurements' && req.method === 'POST') {
           const current = await get(id);
