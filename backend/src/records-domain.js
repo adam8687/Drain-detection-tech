@@ -86,6 +86,34 @@ export function analyzeDrainage(points, calibration) {
   }
   return { result: { drainage_time_seconds: null, outcome: wetAt === null ? 'uncertain' : 'incomplete' }, message: wetAt === null ? 'No measurable drainage event was observed.' : invalid ? 'Waiting for valid dry confirmation from both sensors.' : 'Drainage has not been confirmed complete.' };
 }
+export const STATUS_SETTINGS = Object.freeze({ baselineDrains: 3, slowRatio: 1.5, tooLongRatio: 3 });
+export function drainStatuses(rows, now = Date.now()) {
+  const groups = new Map();
+  for (const row of rows) if (row.record_type === 'drainage') {
+    const key = `${row.fixture_id}\u0000${row.data_source}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const statuses = new Map();
+  for (const group of groups.values()) {
+    // Baseline is the median of the earliest completed drains so later slowdowns cannot shift it.
+    const times = group.filter(r => r.result?.outcome === 'completed').sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, STATUS_SETTINGS.baselineDrains).map(r => r.result.drainage_time_seconds).sort((a, b) => a - b);
+    const baseline = times.length < STATUS_SETTINGS.baselineDrains ? null : times[Math.floor(times.length / 2)];
+    for (const row of group) {
+      let seconds = null;
+      if (row.result?.outcome === 'completed') seconds = row.result.drainage_time_seconds;
+      else if (row.recording_status === 'recording' && row.measurements.length) seconds = (now - Date.parse(ordered(row.measurements)[0].timestamp)) / 1000;
+      const ratio = baseline && seconds !== null ? seconds / baseline : null;
+      let status;
+      if (!baseline) status = 'learning';
+      else if (ratio === null) status = 'unknown';
+      else if (row.recording_status === 'recording') status = ratio > STATUS_SETTINGS.tooLongRatio ? 'running_too_long' : 'in_progress';
+      else status = ratio > STATUS_SETTINGS.slowRatio ? 'slow_drain' : 'normal';
+      statuses.set(row.record_id, { status, baseline_seconds: baseline, ratio: ratio === null ? null : Math.round(ratio * 100) / 100 });
+    }
+  }
+  return statuses;
+}
 export function forecast(points, calibration, stale = false) {
   const withheld = message => ({ state: 'unavailable', seconds_remaining: null, message });
   if (!calibration) return withheld('Calibrate this fixture first.');

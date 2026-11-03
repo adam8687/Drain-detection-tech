@@ -8,7 +8,7 @@
 .controls input { max-width: 180px; }
 .graphs { width: 100%; margin: 24px 0; }
 .badge { display: inline-block; font-size: 12px; font-weight: 600; border: 1px solid #888; border-radius: 24px; padding: 6px 12px; margin-bottom: 18px; }
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .metrics > div { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
 .metrics span, .metrics small { font-size: 12px; line-height: 1.5; opacity: .75; }
 .metrics strong { font-size: clamp(16px, 2.5vw, 25px); font-weight: 550; }
@@ -21,7 +21,13 @@
 .legend span { display: flex; align-items: center; gap: 8px; }
 .legend i { width: 20px; border-top: 3px solid; }
 .bars { margin: 24px 0; display: grid; gap: 14px; }
-.barRow { display: grid; grid-template-columns: 58px 1fr 88px; align-items: center; gap: 12px; font-size: 13px; }
+.status { display: inline-block; width: fit-content; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 24px; color: #fff; background: #6b7280; }
+.status_normal { background: #16a34a; }
+.status_slow_drain { background: #d97706; }
+.status_running_too_long { background: #dc2626; }
+.status_in_progress { background: #2563eb; }
+.metrics strong .status { font-size: 14px; }
+.barRow { display: grid; grid-template-columns: 58px 1fr 88px 130px; align-items: center; gap: 12px; font-size: 13px; }
 .barRow strong { text-align: right; font-weight: 500; }
 .barTrack { height: 20px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 4px; }
 .barTrack > div { height: 100%; border-radius: 4px; background: #2563eb; }

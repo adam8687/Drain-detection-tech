@@ -4,8 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import AccountPanel from '../../components/account-panel';
 import { useSession } from '../../lib/supabase';
 import { DrainApi, DrainApiError } from '../../lib/api';
-import type { DataSource, RecordSummary, RecordView } from '../../lib/api';
+import type { DataSource, DrainStatus, RecordSummary, RecordView } from '../../lib/api';
 import styles from './page.module.css';
+
+const STATUS_TEXT: Record<DrainStatus['status'], string> = { learning: 'Learning baseline', unknown: 'Status unavailable', in_progress: 'Draining', normal: 'Normal', slow_drain: 'Slow drain', running_too_long: 'Running too long' };
+function StatusPill({ value }: { value: DrainStatus | null | undefined }) {
+  if (!value) return null;
+  const detail = value.baseline_seconds === null ? 'Needs 3 completed drains' : `Baseline ${value.baseline_seconds.toFixed(1)} s${value.ratio === null ? '' : ` · ${value.ratio.toFixed(2)}×`}`;
+  return <span className={`${styles.status} ${styles[`status_${value.status}`]}`} title={detail}>{STATUS_TEXT[value.status]}</span>;
+}
 
 export default function DashboardPage() {
   const session = useSession();
@@ -78,6 +85,7 @@ export default function DashboardPage() {
     {view && <>
       <div className={styles.badge}>{source === 'simulation' ? 'Simulated sensor data' : 'Physical sensor data'} · {active ? 'Live recording' : 'Saved recording'}</div>
       <div className={styles.metrics}>
+        {view.computed.drain_status && <div><span>Drain status</span><strong><StatusPill value={view.computed.drain_status} /></strong><small>{view.computed.drain_status.baseline_seconds === null ? 'Needs 3 completed drains for a baseline' : `Baseline ${view.computed.drain_status.baseline_seconds.toFixed(1)} seconds`}</small></div>}
         <div><span>Time left to drain</span><strong>{view.computed.forecast.state === 'forecast' ? `About ${Math.ceil(view.computed.forecast.seconds_remaining!)} seconds` : view.computed.forecast.state === 'dry' ? 'No measurable water' : 'Estimate unavailable'}</strong></div>
         <div><span>Recorded drainage time</span><strong>{view.record.result?.drainage_time_seconds != null ? `${view.record.result.drainage_time_seconds.toFixed(1)} seconds` : view.record.result?.outcome || 'Not finished'}</strong></div>
         <div><span>Measurements</span><strong>{view.computed.sample_count}</strong></div>
@@ -92,7 +100,7 @@ export default function DashboardPage() {
       </figure>
       <details className={styles.chart}><summary>Sensor readings and calibration</summary><pre style={{ overflowX: 'auto', fontSize: 12 }}>{JSON.stringify({ calibration: view.record.calibration, latest_measurement: view.record.measurements[view.computed.sample_index], result: view.record.result }, null, 2)}</pre></details>
     </>}
-    {results.length > 0 && <figure className={styles.chart}><figcaption><h3>Drainage time by recording</h3><p>Shorter bars mean faster drainage.</p></figcaption><div className={styles.bars}>{[...results].reverse().map((r, i) => <div className={styles.barRow} key={r.record_id}><span>Test {i + 1}</span><div className={styles.barTrack}><div style={{ width: `${r.result!.drainage_time_seconds! / maxDuration * 100}%` }} /></div><strong>{r.result!.drainage_time_seconds!.toFixed(1)} seconds</strong></div>)}</div></figure>}
+    {results.length > 0 && <figure className={styles.chart}><figcaption><h3>Drainage time by recording</h3><p>Shorter bars mean faster drainage.</p></figcaption><div className={styles.bars}>{[...results].reverse().map((r, i) => <div className={styles.barRow} key={r.record_id}><span>Test {i + 1}</span><div className={styles.barTrack}><div style={{ width: `${r.result!.drainage_time_seconds! / maxDuration * 100}%` }} /></div><strong>{r.result!.drainage_time_seconds!.toFixed(1)} seconds</strong><StatusPill value={r.drain_status} /></div>)}</div></figure>}
     <details className={styles.chart}><summary>Recording controls</summary><div className={styles.controls}>
       <label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />Fixture is empty, tap off, sensors fixed.</label>
       <button disabled={busy || !confirmed || active} onClick={() => void action('calibration')}>Calibrate empty fixture</button>
