@@ -14,6 +14,12 @@ If both tests fail, verify wiring and sensor power before changing software.
 
 ## Backend uploads
 
+For the Arduino Nano ESP32 USB bench setup, use the
+[USB uploader and setup guide](usb-bridge/README.md) with
+[`us100_usb_upload.ino`](us100_usb_upload/us100_usb_upload.ino).
+It sends structured readings through the existing API and keeps a durable Mac
+outbox for retries. The standalone tests above only print human-readable text.
+
 One ESP32 per fixture, with two US-100 measurement locations. Keep sensors separate, trigger sequentially to reduce interference, and validate electrical compatibility, splash protection and timing with your actual components before use.
 
 The active API is now recording-based; old frame/device/session routes are retired. See `backend/README.md` for complete JSON examples.
