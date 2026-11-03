@@ -1,5 +1,19 @@
 # ESP32 sensor contract
 
+## USB bench tests (Arduino Nano ESP32)
+
+Start with one sensor and Serial Monitor at **115200 baud**:
+
+- [Trigger/echo test](us100_pulse_test/README.md): rear mode jumper **removed**.
+- [UART test](us100_serial_test/README.md): rear mode jumper **installed**.
+
+Both use sensor VCC to **3V3**, GND to **GND**, Trig/TX to **D1/TX**, and
+Echo/RX to **D0/RX**. Select **Arduino Nano ESP32** in Arduino IDE. These
+standalone sketches print measurements over USB; they do not upload to the API.
+If both tests fail, verify wiring and sensor power before changing software.
+
+## Backend uploads
+
 One ESP32 per fixture, with two US-100 measurement locations. Keep sensors separate, trigger sequentially to reduce interference, and validate electrical compatibility, splash protection and timing with your actual components before use.
 
 The active API is now recording-based; old frame/device/session routes are retired. See `backend/README.md` for complete JSON examples.
