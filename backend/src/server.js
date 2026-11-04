@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { configFromEnv } from './config.js';
 import { createRecordStore } from './records-storage.js';
+import { buildAlerts, summarizeAlerts, SEVERITIES } from './alerts.js';
 import { createStore as createAccessStore } from './storage.js';
 import { DEVICE_KEY_PREFIX, hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
@@ -55,6 +56,16 @@ export function createApp(config, store = createRecordStore(config), {
     }
     throw new ApiError(409, 'concurrent_update', 'Recording is busy; retry using the same reading_id');
   };
+  const visibleRows = async (who, filters, limit) => {
+    if (who.deviceId) throw new ApiError(403, 'forbidden', 'Sensor keys cannot list recordings');
+    if (filters.fixture_id) await requireAccess(who, filters.fixture_id);
+    if (who.userId && !filters.fixture_id) {
+      const memberships = await accessStore.list('device_members', { user_id: who.userId }, 100);
+      const lists = await Promise.all(memberships.map(m => store.list({ ...filters, fixture_id: m.device_id }, limit)));
+      return lists.flat().sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit);
+    }
+    return store.list(filters, limit);
+  };
   const summaries = rows => { const statuses = drainStatuses(rows); return rows.map(row => ({ ...summary(row), drain_status: statuses.get(row.record_id) ?? null })); };
   const summary = row => ({ record_id: row.record_id, fixture_id: row.fixture_id, record_type: row.record_type, data_source: row.data_source, recording_status: row.recording_status, calibration: row.calibration, result: row.result, created_at: row.created_at, measurement_count: row.measurements.length });
   const server = http.createServer(async (req, res) => {
@@ -102,14 +113,7 @@ export function createApp(config, store = createRecordStore(config), {
           if (filters.record_type && !['calibration', 'drainage', 'monitoring'].includes(filters.record_type)) fail('Invalid record_type');
           if (filters.recording_status && !['recording', 'finished'].includes(filters.recording_status)) fail('Invalid recording_status');
           const limit = Number(url.searchParams.get('limit') || 100); if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('limit must be 1–200');
-          if (who.deviceId) throw new ApiError(403, 'forbidden', 'Sensor keys cannot list recordings');
-          if (filters.fixture_id) await requireAccess(who, filters.fixture_id);
-          if (who.userId && !filters.fixture_id) {
-            const memberships = await accessStore.list('device_members', { user_id: who.userId }, 100);
-            const lists = await Promise.all(memberships.map(m => store.list({ ...filters, fixture_id: m.device_id }, limit)));
-            return json(200, { records: summaries(lists.flat().sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,limit)) });
-          }
-          return json(200, { records: summaries(await store.list(filters, limit)) });
+          return json(200, { records: summaries(await visibleRows(who, filters, limit)) });
         }
         if (req.method === 'POST') {
           const input = validateRecordInput(await body(req));
@@ -120,6 +124,16 @@ export function createApp(config, store = createRecordStore(config), {
           const row = await store.insert({ record_id: randomUUID(), fixture_id: input.fixture_id, record_type: input.record_type, data_source: input.data_source, recording_status: 'recording', calibration, measurements: [], result: null, created_at: new Date().toISOString() });
           return json(201, row);
         }
+      }
+      if (path === '/api/v1/alerts' && req.method === 'GET') {
+        const filters = {};
+        if (url.searchParams.has('fixture_id')) filters.fixture_id = deviceId(url.searchParams.get('fixture_id'));
+        if (url.searchParams.has('data_source')) { filters.data_source = url.searchParams.get('data_source'); if (!['sensor', 'simulation'].includes(filters.data_source)) fail('Invalid data_source'); }
+        const severity = url.searchParams.get('severity');
+        if (severity !== null && !SEVERITIES.includes(severity)) fail('severity must be critical, warning or info');
+        const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('limit must be 1–200');
+        const all = buildAlerts(await visibleRows(who, filters, 200));
+        return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => severity === null || a.severity === severity).slice(0, limit), generated_at: new Date().toISOString() });
       }
       const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish|stream))?$/i);
       if (match) {

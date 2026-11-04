@@ -21,6 +21,8 @@
 .legend span { display: flex; align-items: center; gap: 8px; }
 .legend i { width: 20px; border-top: 3px solid; }
 .bars { margin: 24px 0; display: grid; gap: 14px; }
+.alertBanner { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 0 0 18px; padding: 14px 18px; border-radius: 12px; border: 1px solid #d97706; border-left-width: 4px; background: color-mix(in srgb, #d97706 10%, transparent); text-decoration: none !important; }
+.alertBannerCritical { border-color: #dc2626; background: color-mix(in srgb, #dc2626 10%, transparent); }
 .status { display: inline-block; width: fit-content; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 24px; color: #fff; background: #6b7280; }
 .status_normal { background: #16a34a; }
 .status_slow_drain { background: #d97706; }

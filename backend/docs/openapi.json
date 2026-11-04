@@ -376,6 +376,67 @@
         ]
       }
     },
+    "/api/v1/alerts": {
+      "get": {
+        "summary": "List backend-derived alerts (slow drains, running too long, worsening trends, sensor faults, silent devices), most severe first",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "fixture_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "data_source",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "sensor",
+                "simulation"
+              ]
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "critical",
+                "warning",
+                "info"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "summary": "List fixtures visible to the signed-in user",

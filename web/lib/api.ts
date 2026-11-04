@@ -10,6 +10,11 @@ export interface RecordSummary { record_id: string; fixture_id: string; record_t
 export interface DrainRecord extends Omit<RecordSummary, 'measurement_count' | 'drain_status'> { measurements: Measurement[] }
 export interface WaterLevelPoint { elapsed_seconds: number; sensor_a_mm: number | null; sensor_b_mm: number | null; gap_before: boolean }
 export interface RecordView { record: DrainRecord; computed: { forecast: { state: 'forecast' | 'dry' | 'unavailable'; seconds_remaining: number | null; message: string }; timeline: { elapsed_seconds: number; seconds_remaining: number | null }[]; water_levels?: WaterLevelPoint[]; sample_index: number; sample_count: number; elapsed_seconds: number; stale: boolean; calibration_progress: number | null; calibration_message: string | null; drain_status: DrainStatus | null } }
+export type AlertSeverity = 'critical' | 'warning' | 'info';
+export type AlertType = 'running_too_long' | 'slow_drain' | 'worsening_trend' | 'unreliable_result' | 'sensor_faults' | 'device_silent';
+export interface DrainAlert { alert_id: string; type: AlertType; severity: AlertSeverity; title: string; message: string; occurred_at: string; fixture_id: string; data_source: DataSource; record_id: string; record_type: RecordType; details: Record<string, unknown> }
+export interface AlertSummary { total: number; critical: number; warning: number; info: number }
+export interface AlertList { summary: AlertSummary; alerts: DrainAlert[]; generated_at: string }
 export class DrainApiError extends Error { status: number; code: string; constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; } }
 export class DrainApi {
   baseUrl: string; token: string; fetcher: typeof fetch;
@@ -27,5 +32,13 @@ export class DrainApi {
   records(fixture: string, source: DataSource, signal?: AbortSignal) { return this.request<{ records: RecordSummary[] }>(`/records?fixture_id=${encodeURIComponent(fixture)}&data_source=${source}`, 'GET', undefined, signal); }
   record(id: string, sample: number | null = null, signal?: AbortSignal) { return this.request<RecordView>(`/records/${encodeURIComponent(id)}${sample === null ? '' : `?sample=${sample}`}`, 'GET', undefined, signal); }
   start(fixture_id: string, data_source: DataSource, record_type: RecordType, confirm_empty = false) { return this.request<DrainRecord>('/records', 'POST', { fixture_id, data_source, record_type, ...(record_type === 'calibration' ? { confirm_empty } : {}) }); }
+  alerts(filters: { fixture?: string; source?: DataSource; severity?: AlertSeverity; limit?: number } = {}, signal?: AbortSignal) {
+    const query = new URLSearchParams();
+    if (filters.fixture) query.set('fixture_id', filters.fixture);
+    if (filters.source) query.set('data_source', filters.source);
+    if (filters.severity) query.set('severity', filters.severity);
+    if (filters.limit) query.set('limit', String(filters.limit));
+    return this.request<AlertList>(`/alerts${query.size ? `?${query}` : ''}`, 'GET', undefined, signal);
+  }
   finish(id: string) { return this.request<RecordView>(`/records/${encodeURIComponent(id)}/finish`, 'POST'); }
 }
