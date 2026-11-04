@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import AccountPanel from '../../components/account-panel';
 import { useSession } from '../../lib/supabase';
 import { DrainApi, DrainApiError } from '../../lib/api';
-import type { DataSource, DrainStatus, RecordSummary, RecordView } from '../../lib/api';
+import type { AlertSummary, DataSource, DrainStatus, RecordSummary, RecordView } from '../../lib/api';
 import styles from './page.module.css';
 
 const STATUS_TEXT: Record<DrainStatus['status'], string> = { learning: 'Learning baseline', unknown: 'Status unavailable', in_progress: 'Draining', normal: 'Normal', slow_drain: 'Slow drain', running_too_long: 'Running too long' };
@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const [view, setView] = useState<RecordView | null>(null);
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [confirmed, setConfirmed] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [alerts, setAlerts] = useState<AlertSummary | null>(null);
   const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || token), [token, session?.access_token]);
   const reportError = (err: unknown) => { setNeedsToken(err instanceof DrainApiError && err.status === 401); setError(err instanceof Error ? err.message : 'Backend unavailable'); };
   useEffect(() => {
@@ -35,6 +36,11 @@ export default function DashboardPage() {
       setId(previous => value.records.some(r => r.record_id === previous) ? previous : value.records.find(r => r.recording_status === 'recording')?.record_id || value.records.find(r => r.result?.outcome === 'completed')?.record_id || value.records.find(r => r.record_type === 'drainage')?.record_id || value.records[0]?.record_id || '');
       setSample(null);
     }).catch(err => { if (!controller.signal.aborted) reportError(err); }); }, 250);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [api, fixture, source, refresh]);
+  useEffect(() => {
+    const controller = new AbortController(); setAlerts(null);
+    const timer = setTimeout(() => { void api.alerts({ fixture, source, limit: 1 }, controller.signal).then(value => { if (!controller.signal.aborted) setAlerts(value.summary); }).catch(() => {}); }, 300);
     return () => { controller.abort(); clearTimeout(timer); };
   }, [api, fixture, source, refresh]);
   useEffect(() => {
@@ -69,6 +75,7 @@ export default function DashboardPage() {
   return <main className={styles.shell}>
     <a href="/">← Back to home</a>
     <h1>Drainage insights</h1>
+    <a href="/alerts">All alerts →</a>
     <div id="account" tabIndex={-1}><AccountPanel /></div>
     <div className={styles.controls}>
       <label>Fixture <input aria-label="Fixture" value={fixture} onChange={e => { setFixture(e.target.value); setId(''); }} /></label>
@@ -81,6 +88,10 @@ export default function DashboardPage() {
       <label>Recording <select value={id} onChange={e => { setId(e.target.value); setSample(null); setView(null); }}><option value="">Select a recording</option>{records.map(r => <option key={r.record_id} value={r.record_id}>{r.record_type} · {r.result?.drainage_time_seconds != null ? `${r.result.drainage_time_seconds.toFixed(1)} seconds` : r.result?.outcome || r.recording_status} · {new Date(r.created_at).toLocaleDateString()}</option>)}</select></label>
       {view && !active && view.computed.sample_count > 0 && <label>Replay <input type="range" min="0" max={view.computed.sample_count - 1} value={sample ?? view.computed.sample_count - 1} onChange={e => setSample(Number(e.target.value))} /><output>{view.computed.elapsed_seconds.toFixed(1)} seconds</output></label>}
     </div>
+    {alerts && alerts.critical + alerts.warning > 0 && <a className={`${styles.alertBanner} ${alerts.critical ? styles.alertBannerCritical : ''}`} href={`/alerts?fixture=${encodeURIComponent(fixture)}&source=${source}`}>
+      <strong>{alerts.critical ? `${alerts.critical} critical` : `${alerts.warning} warning`}{alerts.critical && alerts.warning ? ` · ${alerts.warning} warning` : ''}</strong>
+      <span>alert{alerts.critical + alerts.warning === 1 ? '' : 's'} for this fixture. View alerts →</span>
+    </a>}
     {!records.length && !error && <p>No recordings. Run <code>npm run seed:practice</code> for saved examples, or start a recording below.</p>}
     {view && <>
       <a href={`/live-demo?fixture=${encodeURIComponent(fixture)}&record=${encodeURIComponent(view.record.record_id)}&source=${source}`}>Open live view →</a>

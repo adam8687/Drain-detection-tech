@@ -4,10 +4,11 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   const route = (await context.params).path.join('/');
   const list = route === 'api/v1/records';
   const devices = route === 'api/v1/devices';
+  const alerts = route === 'api/v1/alerts';
   const keyCreation = /^api\/v1\/devices\/[a-zA-Z0-9_-]+\/keys$/.test(route);
   const detail = /^api\/v1\/records\/[0-9a-f-]+$/i.test(route);
   const mutation = /^api\/v1\/records\/[0-9a-f-]+\/(measurements|finish)$/i.test(route);
-  if (!(method === 'GET' ? list || detail || devices : list || mutation || devices || keyCreation)) return Response.json({ error: { code: 'not_found', message: 'Unsupported record route' } }, { status: 404 });
+  if (!(method === 'GET' ? list || detail || devices || alerts : list || mutation || devices || keyCreation)) return Response.json({ error: { code: 'not_found', message: 'Unsupported record route' } }, { status: 404 });
   let bytes: Uint8Array | undefined;
   if (method === 'POST' && !route.endsWith('/finish')) {
     if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return Response.json({ error: { message: 'Send Content-Type: application/json' } }, { status: 415 });
