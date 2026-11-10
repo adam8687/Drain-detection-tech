@@ -21,7 +21,12 @@ bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
 uint32_t lastAttempt = 0, lastSample = 0;
 // Readings are journaled one by one, then uploaded together (server limit: 20).
-constexpr int BATCH_SIZE = 10;
+constexpr int BATCH_SIZE = 10;       // used while uploads are slow (new TLS handshake each time)
+constexpr int FAST_BATCH_SIZE = 2;   // used while the HTTPS connection is being reused
+uint32_t lastPostMs = 100000;
+// Kept for the life of the sketch so the TLS connection can be reused (keep-alive).
+WiFiClient plainClient; WiFiClientSecure secureClient; HTTPClient http;
+bool caSet = false;
 constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
 int batchCount = 0;
 bool batchReady = false;
@@ -199,7 +204,7 @@ void loop() {
     Serial.printf("Wi-Fi and UTC clock ready. ESP IP: %s\n", WiFi.localIP().toString().c_str());
   }
   if (!batchReady) {
-    if (pendingBody.isEmpty() && recoveredRun) {
+    if (pendingBody.isEmpty() && recoveredRun && !RESUME_AFTER_RESTART) {
       stop("Restart detected. Pending point recovered. Finish the old recording and configure a NEW record ID before sampling."); return;
     }
     if (state.getString("started", "") != SENSOR_RECORD_ID && state.putString("started", SENSOR_RECORD_ID) == 0) {
@@ -224,15 +229,15 @@ void loop() {
     }
     batchCount++;
     if (!journalPoint(point, firstOfBatch)) { stop("Could not persist the point; upload stopped."); return; }
-    if (batchCount < BATCH_SIZE) return;
+    if (batchCount < (lastPostMs < 2000 ? FAST_BATCH_SIZE : BATCH_SIZE)) return;
     batchReady = true;
   }
   const uint32_t elapsed = millis() - lastAttempt;
   if (elapsed < 100) { delay(100 - elapsed); }
   lastAttempt = millis();
-  WiFiClient plain; WiFiClientSecure secure; HTTPClient http;
-  if (pendingUrl.startsWith("https://")) secure.setCACert(API_ROOT_CA);
-  const bool ready = pendingUrl.startsWith("https://") ? http.begin(secure, pendingUrl) : http.begin(plain, pendingUrl);
+  if (pendingUrl.startsWith("https://") && !caSet) { secureClient.setCACert(API_ROOT_CA); caSet = true; }
+  http.setReuse(true);
+  const bool ready = pendingUrl.startsWith("https://") ? http.begin(secureClient, pendingUrl) : http.begin(plainClient, pendingUrl);
   if (!ready) { stop("Invalid backend URL; saved point retained."); return; }
   http.setConnectTimeout(5000); http.setTimeout(5000);
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
@@ -245,7 +250,8 @@ void loop() {
   // Unexpected acknowledgements retain the point and stop instead of losing it.
   const String reply = (code == 200 || code == 201) ? http.getString() : String("");
   http.end();
-  if (code <= 0) { secure.stop(); plain.stop(); }
+  lastPostMs = code > 0 ? postMs : 100000;
+  if (code <= 0) { secureClient.stop(); plainClient.stop(); }
   if (code == 200 || code == 201) {
     const String recordField = String("\"record_id\":\"") + SENSOR_RECORD_ID + "\"";
     const bool finished = reply.indexOf("\"recording_status\":\"finished\"") >= 0;

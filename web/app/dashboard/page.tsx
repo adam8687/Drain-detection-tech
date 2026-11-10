@@ -51,7 +51,7 @@ export default function DashboardPage() {
         const value = await api.record(id, sample, controller.signal);
         if (controller.signal.aborted) return;
         setView(value); setError(''); setNeedsToken(false);
-        if (value.record.recording_status === 'recording') timer = setTimeout(load, 1500);
+        if (value.record.recording_status === 'recording') timer = setTimeout(load, 750);
       } catch (err) { if (!controller.signal.aborted) reportError(err); }
     };
     timer = setTimeout(() => void load(), 120);
@@ -108,7 +108,7 @@ export default function DashboardPage() {
       </div>
       <p className={styles.explanation} role="status">{view.record.record_type === 'calibration' ? view.computed.calibration_message : view.computed.forecast.message}</p>
       {view.record.record_type === 'calibration' && active && <progress max="1" value={view.computed.calibration_progress ?? 0} aria-label="Calibration progress" />}
-      <figure className={styles.chart}><figcaption><h3>Live sensor A distance</h3><p>{live.length ? `Latest ${live[live.length - 1].d === null ? 'no valid reading' : `${live[live.length - 1].d} mm`} · last ${live.length} readings, updates every ~1.5 s` : 'No readings yet.'}</p></figcaption>
+      <figure className={styles.chart}><figcaption><h3>Live sensor A distance</h3><p>{live.length ? `Latest ${live[live.length - 1].d === null ? 'no valid reading' : `${live[live.length - 1].d} mm`} · last ${live.length} readings, updates every ~1 s` : 'No readings yet.'}</p></figcaption>
         <svg viewBox="0 0 700 220" role="img" aria-label="Sensor A distance in millimetres over the latest readings">
           {[0,1,2,3].map(i => <g key={i}><line x1="60" x2="650" y1={180 - i * 50} y2={180 - i * 50} stroke="currentColor" opacity=".12" /><text x="50" y={184 - i * 50} textAnchor="end" fill="currentColor" fontSize="12">{Math.round(liveMax * i / 3)}</text></g>)}
           <text x="60" y="14" fill="currentColor" fontSize="12">Distance (mm)</text><path d={livePath} fill="none" stroke="#16a34a" strokeWidth="2" />

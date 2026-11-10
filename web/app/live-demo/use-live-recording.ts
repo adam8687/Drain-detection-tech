@@ -65,7 +65,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
         setRecords(previous => previous.map(record => record.record_id === recordId
           ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.record.measurements.length, calibration: next.record.calibration, drain_status: next.computed.drain_status }
           : record));
-        if (next.record.recording_status === 'recording') timer = setTimeout(() => void load(), 1500);
+        if (next.record.recording_status === 'recording') timer = setTimeout(() => void load(), 750);
       } catch (err) {
         if (!controller.signal.aborted) {
           setView(null); setLoadingRecord(false); reportError(err);

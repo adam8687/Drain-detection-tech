@@ -16,6 +16,7 @@ constexpr bool ALLOW_LOCAL_HTTP = false;
 // First use only, if Serial Monitor reports uninitialized storage. This erases
 // the FFat partition. Leave false whenever there could be a pending point.
 constexpr bool INITIALIZE_EMPTY_FILESYSTEM = false;
+constexpr bool RESUME_AFTER_RESTART = false;
 // For a deployed HTTPS backend, supply its trusted root CA PEM here.
 // Never use setInsecure(), a Supabase secret, or the backend admin API_KEY.
 constexpr char API_ROOT_CA[] = R"PEM()PEM";

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import MobileMenu from '../../components/mobile-menu';
 import type { DataSource } from '../../lib/api';
 import { useLiveRecording } from './use-live-recording';
-import { HistoryChart, WaterLevelChart } from './charts';
+import { HistoryChart, RawDistanceChart, WaterLevelChart } from './charts';
 import styles from './page.module.css';
 
 const artwork = '/images/live-view/';
@@ -20,6 +20,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
   const fixtureName = data.fixtures.find(f => f.id === data.fixture)?.name || 'Live view';
   const recent = view?.record.measurements.at(-1);
   const levels = view?.computed.water_levels ?? [];
+  const rawReadings = view?.record.measurements ?? [];
   const hasLevels = levels.some(p => p.sensor_a_mm !== null || p.sensor_b_mm !== null);
   const firstLevel = levels.find(p => p.sensor_a_mm !== null);
   const duration = view?.record.result?.drainage_time_seconds;
@@ -96,7 +97,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
                 <p className={styles.normal}>{baseline != null ? `Baseline ${baseline.toFixed(1)} s` : 'Normal baseline unavailable'}</p>
                 <p className={styles.caption}>{baseline != null ? 'Baseline uses the earliest completed drains; starting water level is not normalized.' : 'Needs three completed drains to establish a baseline.'}</p>
               </div>
-              {hasLevels ? <WaterLevelChart points={levels} /> : <div className={styles.emptyWater}><p className={styles.caption}>Water level</p><p>{data.loading ? 'Loading measurements…' : 'Calibrated water-level measurements are not available for this recording.'}</p></div>}
+              {hasLevels ? <WaterLevelChart points={levels} /> : rawReadings.some(r => r.sensor_a.distance_mm !== null) ? <RawDistanceChart readings={rawReadings} /> : <div className={styles.emptyWater}><p className={styles.caption}>Water level</p><p>{data.loading ? 'Loading measurements…' : 'Calibrated water-level measurements are not available for this recording.'}</p></div>}
             </div>
             {statusMessage && <p className={styles.measurementNote}>{statusMessage}</p>}
             {view && <p className={styles.measurementNote}>Elapsed time starts at the first reading. Drainage duration uses the observed wet-to-dry thresholds; it is not a tap-off timer.</p>}
