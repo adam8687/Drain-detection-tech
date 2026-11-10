@@ -32,6 +32,39 @@ export function WaterLevelChart({ points }: { points: WaterLevelPoint[] }) {
   </div>;
 }
 
+type RawReading = { timestamp: string; sensor_a: { distance_mm: number | null; status: string } };
+// Uncalibrated fallback: raw distance from sensor A to whatever is in front of it
+// (larger = farther). Shows the latest window of readings, newest on the right.
+export function RawDistanceChart({ readings }: { readings: RawReading[] }) {
+  const points = readings.slice(-120);
+  const t0 = points.length ? Date.parse(points[0].timestamp) : 0;
+  const times = points.map(p => (Date.parse(p.timestamp) - t0) / 1000);
+  const maxTime = Math.max(1, ...times);
+  const maxDist = Math.max(100, ...points.map(p => p.sensor_a.distance_mm ?? 0));
+  let connected = false;
+  const line = points.map((p, i) => {
+    const d = p.sensor_a.distance_mm;
+    if (d === null) { connected = false; return ''; }
+    const command = connected ? 'L' : 'M'; connected = true;
+    return `${command}${4 + times[i] / maxTime * 352},${190 - d / maxDist * 180}`;
+  }).join(' ');
+  const latest = points.at(-1)?.sensor_a.distance_mm;
+  return <div className={styles.waterChart}>
+    <p className={styles.caption}>Raw distance, sensor A <span>mm · latest {latest ?? '—'}</span></p>
+    <div className={styles.plotRow}>
+      <div className={styles.axisY} aria-hidden="true">{[4, 3, 2, 1, 0].map(i => <span key={i}>{Math.round(maxDist * i / 4)}</span>)}</div>
+      <div className={styles.plotCanvas}>
+        <svg viewBox="0 0 364 200" preserveAspectRatio="none" role="img" aria-label="Raw sensor A distance in millimeters over the latest readings">
+          {[0, 1, 2, 3, 4].map(i => <line key={i} x1="4" x2="356" y1={190 - i * 45} y2={190 - i * 45} stroke="#b8c0ca" strokeWidth=".7" />)}
+          <path d={line} fill="none" stroke="#4b5865" strokeWidth="3" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className={styles.axisX} aria-hidden="true">{[0, 1, 2, 3, 4].map(i => <span key={i}>{Math.round(maxTime * i / 4)} s</span>)}</div>
+      </div>
+    </div>
+    <div className={styles.legend}><span>● Sensor A (uncalibrated)</span></div>
+  </div>;
+}
+
 export function HistoryChart({ records, range }: { records: RecordSummary[]; range: number }) {
   const end = Date.now(), start = end - range * 86400000;
   const points = records.filter(r => r.record_type === 'drainage' && r.result?.outcome === 'completed'
