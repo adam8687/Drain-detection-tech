@@ -1,5 +1,10 @@
 # Backend: drain_records
 
+The recommended wireless path now runs these calculations inside Supabase:
+[cloud setup](../supabase/CLOUD-SETUP.md). The Node API below remains supported
+for local development and USB uploads. Its stateless domain/auth/alert functions
+are shared with the Edge Function rather than duplicated.
+
 Node.js 24+, no dependency install. `npm start` from the root loads `backend/.env`, uses Supabase by default, and fails startup if `drain_records` cannot be read. There is no silent SQLite fallback. Apply `supabase/migrations/202610270001_drain_records.sql` before starting. Run `npm run migrate:records` to copy legacy Supabase records while older writers are stopped. See the root README for the complete upgrade/run/push sequence.
 
 ## Canonical routes

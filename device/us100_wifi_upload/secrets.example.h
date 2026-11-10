@@ -6,12 +6,15 @@ constexpr char WIFI_SSID[] = "YOUR_2_4_GHZ_WIFI";
 constexpr char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";
 // Use your Mac's LAN IP, NOT localhost, for a local backend. No trailing slash.
 constexpr char API_BASE_URL[] = "http://192.168.1.100:8000";
+// One-time migration only: cloud:configure verifies the same recording/fixture
+// in Supabase before setting this. Pending point body/ID/time remain unchanged.
+constexpr char PREVIOUS_API_BASE_URL[] = "";
 constexpr char SENSOR_RECORD_ID[] = "PASTE_RECORD_UUID";
 constexpr char SENSOR_KEY[] = "dk_PASTE_FIXTURE_KEY";
 // Enable only for a trusted local Wi-Fi test. HTTP sends the key unencrypted.
 constexpr bool ALLOW_LOCAL_HTTP = false;
 // First use only, if Serial Monitor reports uninitialized storage. This erases
-// the LittleFS partition. Leave false whenever there could be a pending point.
+// the FFat partition. Leave false whenever there could be a pending point.
 constexpr bool INITIALIZE_EMPTY_FILESYSTEM = false;
 // For a deployed HTTPS backend, supply its trusted root CA PEM here.
 // Never use setInsecure(), a Supabase secret, or the backend admin API_KEY.

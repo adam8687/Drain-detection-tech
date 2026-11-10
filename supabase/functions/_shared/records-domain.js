@@ -1,0 +1,203 @@
+import { isDeepStrictEqual } from 'node:util';
+import { ApiError, object, number, uuid, timestamp, deviceId } from './validation.js';
+
+export const SETTINGS = Object.freeze({ wet: 20, dry: 8, stable: 3, maxGap: 5000, maxMeasurements: 5000 });
+export const fail = (message, status = 422, code = 'validation_error') => { throw new ApiError(status, code, message); };
+export function calibrationSnapshot(value) {
+  if (value === null) return null;
+  object(value, ['sensor_a_empty_mm', 'sensor_b_empty_mm']);
+  return { sensor_a_empty_mm: number(value.sensor_a_empty_mm, 'sensor_a_empty_mm', 20, 4500), sensor_b_empty_mm: number(value.sensor_b_empty_mm, 'sensor_b_empty_mm', 20, 4500) };
+}
+export function validateRecordInput(value) {
+  object(value, ['fixture_id', 'record_type', 'data_source', 'confirm_empty']);
+  if (!['calibration', 'drainage', 'monitoring'].includes(value.record_type)) fail('record_type must be calibration, drainage or monitoring');
+  if (!['sensor', 'simulation'].includes(value.data_source)) fail('data_source must be sensor or simulation');
+  if (value.record_type === 'calibration' && value.confirm_empty !== true) fail('Confirm the fixture is empty before calibration', 422, 'empty_confirmation_required');
+  return { fixture_id: deviceId(value.fixture_id), record_type: value.record_type, data_source: value.data_source };
+}
+export function validateMeasurement(value, now = Date.now()) {
+  object(value, ['reading_id', 'timestamp', 'sensor_a', 'sensor_b']);
+  const time = timestamp(value.timestamp, 'timestamp');
+  if (Date.parse(time) > now + 120000) fail('timestamp is more than two minutes in the future');
+  const sensor = input => {
+    object(input, ['distance_mm', 'status']);
+    if (!['ok', 'timeout', 'out_of_range'].includes(input.status)) fail('Invalid sensor status');
+    if (input.status !== 'ok') { if (input.distance_mm !== null) fail('Failed readings require distance_mm: null'); return { distance_mm: null, status: input.status }; }
+    return { distance_mm: number(input.distance_mm, 'distance_mm', 20, 4500), status: 'ok' };
+  };
+  return { reading_id: uuid(value.reading_id, 'reading_id'), timestamp: time, sensor_a: sensor(value.sensor_a), sensor_b: sensor(value.sensor_b) };
+}
+export const MAX_BATCH = 20;
+// Accepts one measurement object or {measurements:[...]} (1..MAX_BATCH points).
+export function validateMeasurements(value, now = Date.now()) {
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'measurements' in value) {
+    object(value, ['measurements']);
+    if (!Array.isArray(value.measurements) || value.measurements.length < 1 || value.measurements.length > MAX_BATCH) fail(`measurements must contain 1 to ${MAX_BATCH} points`);
+    const points = value.measurements.map(point => validateMeasurement(point, now));
+    if (new Set(points.map(p => p.reading_id)).size !== points.length) fail('reading_id values must be unique within a batch');
+    return points;
+  }
+  return [validateMeasurement(value, now)];
+}
+export const ordered = points => [...points].sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.reading_id.localeCompare(b.reading_id));
+export function depths(point, calibration) {
+  if (!calibration) return null;
+  const result = [];
+  for (const sensor of ['a', 'b']) {
+    const reading = point[`sensor_${sensor}`];
+    if (reading.status !== 'ok' || reading.distance_mm === null) return null;
+    const depth = calibration[`sensor_${sensor}_empty_mm`] - reading.distance_mm;
+    if (depth < -20) return null;
+    result.push(Math.max(0, depth));
+  }
+  return result;
+}
+export function learnCalibration(points) {
+  const window = [];
+  for (const point of ordered(points)) {
+    if (['sensor_a', 'sensor_b'].some(sensor => point[sensor].status !== 'ok')) { window.length = 0; continue; }
+    const previous = window.at(-1);
+    if (previous && (Date.parse(point.timestamp) <= Date.parse(previous.timestamp) || Date.parse(point.timestamp) - Date.parse(previous.timestamp) > SETTINGS.maxGap)) window.length = 0;
+    window.push(point);
+  }
+  while (window.length > 20 && Date.parse(window.at(-1).timestamp) - Date.parse(window[1].timestamp) >= 8000) window.shift();
+  const span = window.length ? Date.parse(window.at(-1).timestamp) - Date.parse(window[0].timestamp) : 0;
+  const progress = Math.min(1, window.length / 20, span / 8000);
+  const calibration = {};
+  for (const sensor of ['a', 'b']) {
+    const values = window.map(p => p[`sensor_${sensor}`].distance_mm).sort((a, b) => a - b);
+    if (!values.length || values.at(-1) - values[0] > 4) return { progress: 0, calibration: null, message: 'Keep the fixture empty and the sensor mounts still.' };
+    const median = (values[Math.floor(values.length / 2)] + values[Math.floor((values.length - 1) / 2)]) / 2;
+    calibration[`sensor_${sensor}_empty_mm`] = Math.round(median * 10) / 10;
+  }
+  return { progress, calibration: progress === 1 ? calibration : null, message: `${window.length} stable samples; ${(span / 1000).toFixed(1)} seconds (minimum 20 samples over 8 seconds).` };
+}
+export function analyzeDrainage(points, calibration) {
+  if (!calibration) return { result: { drainage_time_seconds: null, outcome: 'uncertain' }, message: 'No calibration is available.' };
+  let wetAt = null, dryAt = null, dryCount = 0, lastTime = null, lastValidTime = null, gap = false, invalid = false;
+  for (const point of ordered(points)) {
+    const time = Date.parse(point.timestamp);
+    if (time === lastTime) continue;
+    if (wetAt !== null && lastValidTime !== null && time - lastValidTime > SETTINGS.maxGap) gap = true;
+    lastTime = time;
+    const values = depths(point, calibration);
+    if (!values) { invalid = true; dryCount = 0; dryAt = null; continue; }
+    if (wetAt === null) {
+      // Water at either location starts observation; both must be dry to finish.
+      if (!values.some(v => v >= SETTINGS.wet)) continue;
+      wetAt = time;
+    }
+    lastValidTime = time;
+    if (values.every(v => v <= SETTINGS.dry)) {
+      if (!dryCount) dryAt = time;
+      dryCount++;
+      if (dryCount >= SETTINGS.stable) return gap
+        ? { result: { drainage_time_seconds: null, outcome: 'uncertain' }, message: 'A sampling gap prevents reliable drainage timing.' }
+        : { result: { drainage_time_seconds: (dryAt - wetAt) / 1000, outcome: 'completed' }, message: 'Both sensors confirmed the empty range.' };
+    } else { dryCount = 0; dryAt = null; }
+  }
+  return { result: { drainage_time_seconds: null, outcome: wetAt === null ? 'uncertain' : 'incomplete' }, message: wetAt === null ? 'No measurable drainage event was observed.' : invalid ? 'Waiting for valid dry confirmation from both sensors.' : 'Drainage has not been confirmed complete.' };
+}
+export const STATUS_SETTINGS = Object.freeze({ baselineDrains: 3, slowRatio: 1.5, tooLongRatio: 3 });
+export function drainStatuses(rows, now = Date.now()) {
+  const groups = new Map();
+  for (const row of rows) if (row.record_type === 'drainage') {
+    const key = `${row.fixture_id}\u0000${row.data_source}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const statuses = new Map();
+  for (const group of groups.values()) {
+    // Baseline is the median of the earliest completed drains so later slowdowns cannot shift it.
+    const times = group.filter(r => r.result?.outcome === 'completed').sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, STATUS_SETTINGS.baselineDrains).map(r => r.result.drainage_time_seconds).sort((a, b) => a - b);
+    const baseline = times.length < STATUS_SETTINGS.baselineDrains ? null : times[Math.floor(times.length / 2)];
+    for (const row of group) {
+      let seconds = null;
+      if (row.result?.outcome === 'completed') seconds = row.result.drainage_time_seconds;
+      else if (row.recording_status === 'recording' && row.measurements.length) seconds = (now - Date.parse(ordered(row.measurements)[0].timestamp)) / 1000;
+      const ratio = baseline && seconds !== null ? seconds / baseline : null;
+      let status;
+      if (!baseline) status = 'learning';
+      else if (ratio === null) status = 'unknown';
+      else if (row.recording_status === 'recording') status = ratio > STATUS_SETTINGS.tooLongRatio ? 'running_too_long' : 'in_progress';
+      else status = ratio > STATUS_SETTINGS.slowRatio ? 'slow_drain' : 'normal';
+      statuses.set(row.record_id, { status, baseline_seconds: baseline, ratio: ratio === null ? null : Math.round(ratio * 100) / 100 });
+    }
+  }
+  return statuses;
+}
+export function forecast(points, calibration, stale = false) {
+  const withheld = message => ({ state: 'unavailable', seconds_remaining: null, message });
+  if (!calibration) return withheld('Calibrate this fixture first.');
+  if (stale) return withheld('Waiting for fresh sensor readings.');
+  const rows = ordered(points), window = [];
+  for (let i = rows.length - 1; i >= 0 && window.length < 8; i--) {
+    const p = rows[i], newer = window.at(-1);
+    if (!depths(p, calibration) || (newer && (Date.parse(newer.timestamp) <= Date.parse(p.timestamp) || Date.parse(newer.timestamp) - Date.parse(p.timestamp) > SETTINGS.maxGap))) break;
+    window.push(p);
+  }
+  if (window.length >= SETTINGS.stable && window.slice(0, SETTINGS.stable).every(p => depths(p, calibration).every(d => d <= SETTINGS.dry))) return { state: 'dry', seconds_remaining: 0, message: 'Both sensors confirm no measurable water.' };
+  if (window.length < 6) return withheld('Waiting for consecutive valid readings.');
+  window.reverse();
+  const start = Date.parse(window[0].timestamp), times = window.map(p => (Date.parse(p.timestamp) - start) / 1000);
+  if (times.at(-1) < 2) return withheld('Waiting for a longer measurement window.');
+  const remaining = [];
+  for (let sensor = 0; sensor < 2; sensor++) {
+    const values = window.map(p => depths(p, calibration)[sensor]), depth = values.at(-1);
+    if (depth <= SETTINGS.dry) { remaining.push(0); continue; }
+    const meanT = times.reduce((a, b) => a + b, 0) / times.length, meanD = values.reduce((a, b) => a + b, 0) / values.length;
+    const slope = times.reduce((sum, t, i) => sum + (t - meanT) * (values[i] - meanD), 0) / times.reduce((sum, t) => sum + (t - meanT) ** 2, 0);
+    const variation = values.reduce((sum, d) => sum + (d - meanD) ** 2, 0);
+    const error = values.reduce((sum, d, i) => sum + (d - meanD - slope * (times[i] - meanT)) ** 2, 0);
+    if (slope >= -0.2 || !variation || 1 - error / variation < 0.85 || values.some((d, i) => i && d - values[i - 1] > 4)) return withheld('The water level is too irregular or is not falling.');
+    remaining.push((depth - SETTINGS.dry) / -slope);
+  }
+  const seconds = Math.max(...remaining);
+  if (seconds === 0) return withheld('Waiting for stable dry confirmation.');
+  if (seconds > 120) return withheld('Drainage is beyond the two-minute forecast horizon.');
+  return { state: 'forecast', seconds_remaining: seconds, message: 'Experimental estimate; assumes the tap is off.' };
+}
+export function computedView(record, sample = null) {
+  const rows = ordered(record.measurements);
+  const position = sample === null ? rows.length - 1 : Math.min(sample, rows.length - 1);
+  const visible = rows.slice(0, position + 1);
+  const stale = record.recording_status === 'recording' && (!rows.length || Date.now() - Date.parse(rows.at(-1).timestamp) > 15000);
+  const result = forecast(visible, record.calibration, stale && sample === null);
+  const first = rows[0]?.timestamp;
+  const timeline = visible.map((p, i) => ({ elapsed_seconds: (Date.parse(p.timestamp) - Date.parse(first)) / 1000, seconds_remaining: forecast(visible.slice(Math.max(0, i - 7), i + 1), record.calibration).seconds_remaining }));
+  const water_levels = visible.map((point, index) => {
+    const values = depths(point, record.calibration);
+    const gap_before = index > 0 && Date.parse(point.timestamp) - Date.parse(visible[index - 1].timestamp) > SETTINGS.maxGap;
+    return { elapsed_seconds: (Date.parse(point.timestamp) - Date.parse(first)) / 1000, sensor_a_mm: values?.[0] ?? null, sensor_b_mm: values?.[1] ?? null, gap_before };
+  });
+  if (stale && sample === null && timeline.length) timeline.at(-1).seconds_remaining = null;
+  const learning = record.record_type === 'calibration' ? learnCalibration(visible) : null;
+  return { forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
+}
+// Applies points in order inside one atomic update. Points arriving after the
+// recording completes (calibration/drainage reaching its result) are dropped.
+export function appendMeasurements(record, points) {
+  let current = record, duplicate = true; const wasRecording = record.recording_status === 'recording';
+  for (const point of points) {
+    if (wasRecording && current.recording_status !== 'recording') break;
+    const step = appendMeasurement(current, point);
+    current = step.record; duplicate = duplicate && step.duplicate;
+  }
+  return { record: current, duplicate };
+}
+export function appendMeasurement(record, point) {
+  const existing = record.measurements.find(p => p.reading_id === point.reading_id);
+  if (existing) { if (!isDeepStrictEqual(existing, point)) fail('reading_id was reused with different measurements', 409, 'reading_conflict'); return { record, duplicate: true }; }
+  if (record.recording_status !== 'recording') fail('Recording is finished; start a new record', 409, 'record_finished');
+  if (record.measurements.length >= SETTINGS.maxMeasurements) fail('Recording reached 5000 samples; finish it and start another', 409, 'record_full');
+  const next = { ...record, measurements: ordered([...record.measurements, point]) };
+  if (next.record_type === 'calibration') {
+    const learned = learnCalibration(next.measurements);
+    if (learned.calibration) { next.calibration = learned.calibration; next.recording_status = 'finished'; }
+  }
+  if (next.record_type === 'drainage') {
+    const analysis = analyzeDrainage(next.measurements, next.calibration);
+    if (analysis.result.outcome === 'completed') { next.result = analysis.result; next.recording_status = 'finished'; }
+  }
+  return { record: next, duplicate: false };
+}

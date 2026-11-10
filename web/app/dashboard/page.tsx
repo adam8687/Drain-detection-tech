@@ -16,8 +16,8 @@ function StatusPill({ value }: { value: DrainStatus | null | undefined }) {
 
 export default function DashboardPage() {
   const session = useSession();
-  const [fixture, setFixture] = useState('practice-sink-v2');
-  const [source, setSource] = useState<DataSource>('simulation');
+  const [fixture, setFixture] = useState(process.env.NEXT_PUBLIC_DEFAULT_FIXTURE_ID || 'practice-sink-v2');
+  const [source, setSource] = useState<DataSource>(process.env.NEXT_PUBLIC_DEFAULT_DATA_SOURCE === 'sensor' ? 'sensor' : 'simulation');
   const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
   const [needsToken, setNeedsToken] = useState(false);
   const [records, setRecords] = useState<RecordSummary[]>([]);
@@ -70,6 +70,10 @@ export default function DashboardPage() {
   const maxX = Math.max(10, ...chart.map(p => p.elapsed_seconds)), maxY = Math.max(10, ...chart.map(p => p.seconds_remaining ?? 0));
   let drawing = false;
   const path = chart.map(p => { if (p.seconds_remaining === null) { drawing = false; return ''; } const prefix = drawing ? 'L' : 'M'; drawing = true; return `${prefix}${60 + p.elapsed_seconds / maxX * 590},${220 - p.seconds_remaining / maxY * 180}`; }).join(' ');
+  const live = (view?.record.measurements ?? []).slice(-120).map(m => ({ d: m.sensor_a.status === 'ok' ? m.sensor_a.distance_mm : null }));
+  const liveMax = Math.max(100, ...live.map(p => p.d ?? 0));
+  let liveDrawing = false;
+  const livePath = live.map((p, i) => { if (p.d === null) { liveDrawing = false; return ''; } const prefix = liveDrawing ? 'L' : 'M'; liveDrawing = true; return `${prefix}${60 + i / Math.max(1, live.length - 1) * 590},${180 - p.d / liveMax * 150}`; }).join(' ');
   const results = records.filter(r => r.result?.outcome === 'completed');
   const maxDuration = Math.max(1, ...results.map(r => r.result!.drainage_time_seconds!));
   return <main className={styles.shell}>
@@ -104,6 +108,12 @@ export default function DashboardPage() {
       </div>
       <p className={styles.explanation} role="status">{view.record.record_type === 'calibration' ? view.computed.calibration_message : view.computed.forecast.message}</p>
       {view.record.record_type === 'calibration' && active && <progress max="1" value={view.computed.calibration_progress ?? 0} aria-label="Calibration progress" />}
+      <figure className={styles.chart}><figcaption><h3>Live sensor A distance</h3><p>{live.length ? `Latest ${live[live.length - 1].d === null ? 'no valid reading' : `${live[live.length - 1].d} mm`} · last ${live.length} readings, updates every ~1.5 s` : 'No readings yet.'}</p></figcaption>
+        <svg viewBox="0 0 700 220" role="img" aria-label="Sensor A distance in millimetres over the latest readings">
+          {[0,1,2,3].map(i => <g key={i}><line x1="60" x2="650" y1={180 - i * 50} y2={180 - i * 50} stroke="currentColor" opacity=".12" /><text x="50" y={184 - i * 50} textAnchor="end" fill="currentColor" fontSize="12">{Math.round(liveMax * i / 3)}</text></g>)}
+          <text x="60" y="14" fill="currentColor" fontSize="12">Distance (mm)</text><path d={livePath} fill="none" stroke="#16a34a" strokeWidth="2" />
+        </svg>
+      </figure>
       <figure className={styles.chart}><figcaption><h3>Estimated time left to drain</h3><p>Calculated by the backend. Gaps mean an estimate was unavailable.</p></figcaption>
         <p className={styles.chartHint}>Swipe horizontally to explore the chart.</p>
         <svg viewBox="0 0 700 280" role="img" aria-label="Estimated seconds remaining against elapsed seconds">

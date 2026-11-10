@@ -16,12 +16,18 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     if (reader) while (true) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > 16384) { await reader.cancel(); return Response.json({ error: { message: 'Request exceeds 16KB' } }, { status: 413 }); } chunks.push(next.value); }
     bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   }
-  const target = new URL(`/${route}`, process.env.BACKEND_URL || 'http://127.0.0.1:8000'); target.search = new URL(request.url).search;
+  const cloud = process.env.SUPABASE_FUNCTION_URL;
+  const base = (cloud || process.env.BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  const target = new URL(`${base}/${route}`); target.search = new URL(request.url).search;
   try {
-    const auth = request.headers.get('authorization');
+    // Optional bench viewer can only read its one fixture. Never inject an admin
+    // or sensor credential; browser writes still require the user's own session.
+    const supplied = request.headers.get('authorization');
+    const viewer = cloud && method === 'GET' ? process.env.DRAIN_VIEWER_TOKEN : '';
+    const auth = supplied || (viewer ? `Bearer ${viewer}` : null);
     const response = await fetch(target, { method, cache: 'no-store', redirect: 'error', signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]), headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: auth } : {}) }, ...(bytes ? { body: bytes as BodyInit } : {}) });
     return new Response(response.body, { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
-  } catch { return Response.json({ error: { code: 'backend_unavailable', message: 'Start the backend with npm start and apply the drain_records migration.' } }, { status: 503 }); }
+  } catch { return Response.json({ error: { code: 'backend_unavailable', message: cloud ? 'Supabase function unavailable. Check cloud deployment and network access.' : 'Start the backend with npm start and apply the drain_records migration.' } }, { status: 503 }); }
 }
 export const GET = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'GET');
 export const POST = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'POST');

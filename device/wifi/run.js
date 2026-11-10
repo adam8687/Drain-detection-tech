@@ -74,13 +74,17 @@ try {
   } else {
     const source = await optionalFile(new URL('.env', folder));
     if (!source) throw Error('Run npm run wifi:init, then edit device/wifi/.env.');
-    const config = settings(process.env, parseEnv(source));
+    const wifi = parseEnv(source);
+    const config = settings(process.env, wifi);
+    if (config.cloud) config.rootCa = await optionalFile(new URL(wifi.API_ROOT_CA_FILE || 'device/wifi/data/supabase-root-ca.pem', root));
+    const cloudSecrets = parseEnv(await optionalFile(new URL('supabase/.env.cloud', root)));
     const dbConfig = configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' });
-    const token = process.env.OWNER_TOKEN || process.env.API_KEY || '';
+    const token = process.env.OWNER_TOKEN || (config.cloud ? cloudSecrets.DRAIN_ADMIN_TOKEN : process.env.API_KEY) || '';
     let saved = JSON.parse(await optionalFile(statePath) || '{"fixtures":{}}');
     const saveState = () => privateWrite(statePath, JSON.stringify(saved, null, 2) + '\n');
     console.log(`API ${config.base} | Website ${config.web} | A: D1/D0, B: D3/D2 | USB monitor: 115200 baud`);
     if (command === 'start') {
+      if (config.cloud) throw Error('Cloud mode does not need the local backend. Start only the website with npm run cloud:start.');
       await checkTables(dbConfig);
       await start(config);
     } else if (command === 'check') {

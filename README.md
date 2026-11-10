@@ -1,5 +1,11 @@
 # Drain Monitor
 
+**Recommended physical-sensor setup:** [ESP → Supabase → frontend](supabase/CLOUD-SETUP.md).
+The hosted ingestion function runs the existing calculations inside Supabase, so
+the ESP no longer needs to reach a Mac or a local port-8000 backend. Use
+`npm run cloud:start` to view the local frontend in this mode. The local-backend
+instructions below remain available for development and the USB alternative.
+
 A two-US-100 / one-ESP32-per-fixture prototype. Sensor distances are persisted in Supabase and displayed as drainage times. The active schema is now **one table: `drain_records`**. Calibration recordings establish empty references; drainage and monitoring recordings retain baseline snapshots and arrays of measurements. Results, calibration validation and experimental forecasts are computed by the backend.
 
 ## Upgrade this checkout

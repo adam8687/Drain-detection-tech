@@ -1,5 +1,11 @@
 # Friend's Wi-Fi test checklist
 
+For the recommended Mac-independent path, use [direct Supabase cloud setup](../../supabase/CLOUD-SETUP.md).
+This page describes the optional local-LAN backend alternative. In cloud mode,
+wifi:prepare/watch/finish use Supabase and cloud:start runs only the website.
+
+For UT Austin campus Wi-Fi, first follow [utexas-iot registration](UTEXAS-IOT.md).
+
 **Nano ESP32 + US-100 → Wi-Fi → backend → Supabase → website.** Requirements:
 Node.js 24+, Arduino IDE with Arduino ESP32 Boards, and an authorized backend/.env
 on your trusted computer. Share project files, never environment files, generated
@@ -49,7 +55,8 @@ Your Mac must stay awake with Internet access for this local setup.
    **generates secrets.h** automatically. A manual secrets.h is protected: back
    it up and add --replace-config only to intentionally switch to generated settings.
 7. Arduino IDE: open **device/us100_wifi_upload/us100_wifi_upload.ino**, select
-   **Arduino Nano ESP32**, select its USB port, Upload. No Supabase library needed.
+   **Arduino Nano ESP32**, select its USB port, keep **Partition Scheme → With FAT
+   partition (default)**, Upload. No Supabase library needed.
    Open Serial Monitor at **115200**; wait for Saved measurement in Supabase.
 8. `npm run wifi:watch`. Waits up to 60 seconds for a NEW real sensor point and
    compares it exactly across the API, hosted Supabase and website proxy. It never
