@@ -1,6 +1,9 @@
 # US-100 uploads over Wi-Fi (Arduino Nano ESP32)
 
-**Recommended:** use the [scripted friend-testing checklist](../wifi/README.md).
+**Recommended:** use [direct Supabase cloud setup](../../supabase/CLOUD-SETUP.md)
+to collect without a Mac backend. This firmware supports that hosted HTTPS path.
+
+For the optional local-LAN alternative, use the [scripted friend-testing checklist](../wifi/README.md).
 It starts both servers with matching ports, generates secrets.h and verifies new
 real readings across the API, Supabase and website. Below is the manual alternative;
 do not mix its USB setup helper with the scripted path.
@@ -23,7 +26,7 @@ insert/update would bypass backend calibration, validation, duplicate detection
 and result calculation. Our sensor key (`dk_...`) authenticates to our API, not to
 Supabase. Do not disable database permissions or put a Supabase secret/admin token
 on the board to make a direct-insert example work. This sketch uses WiFi,
-HTTPClient, WiFiClientSecure, LittleFS and Preferences bundled with the installed
+HTTPClient, WiFiClientSecure, FFat and Preferences bundled with the installed
 Arduino ESP32 board package; no Library Manager additions are required.
 
 ## 1. Start the backend and obtain a recording
@@ -71,12 +74,13 @@ same fixture. The owner creates recordings; sensor keys can only append readings
 4. Use a 2.4 GHz network. The ESP and Mac must be able to reach each other;
    guest/campus isolation or the Mac firewall may block port 8000. Confirm
    `http://YOUR_MAC_LAN_IP:8000/health` opens on another device on that network.
-5. Select **Arduino Nano ESP32**, its port, then Upload. Keep default board
-   partition settings that provide a filesystem. Open Serial Monitor at **115200**.
+5. Select **Arduino Nano ESP32**, its port, then Upload. Keep **Tools → Partition
+   Scheme → With FAT partition (default)**. The sketch uses FFat, matching the
+   Nano's default layout. Open Serial Monitor at **115200**.
 6. If it reports uninitialized storage on first use, set
    `INITIALIZE_EMPTY_FILESYSTEM = true`, upload once, then restore it to false
    for subsequent uploads. This explicitly permits formatting an unmountable
-   LittleFS partition; never enable it when there may be an unsaved reading.
+   FFat partition; never enable it when there may be an unsaved reading.
 
 Expected messages:
 
@@ -150,7 +154,7 @@ or provision a new record to the board. Those are separate future improvements.
 
 ## Recovery and prototype limits
 
-- Each sample is saved to LittleFS before sending. Only one unacknowledged sample
+- Each sample is saved to FFat before sending. Only one unacknowledged sample
   is kept. A network failure pauses further sampling; it does not provide continuous
   offline collection. The original UUID, timestamp and body are retried unchanged.
   The backend deduplicates a lost response. A measurement interrupted before its

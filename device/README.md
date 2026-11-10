@@ -2,6 +2,10 @@
 
 ## Wi-Fi uploads (Arduino Nano ESP32)
 
+**Recommended:** [direct Supabase cloud setup](../supabase/CLOUD-SETUP.md).
+The ESP uses verified HTTPS and does not contact a Mac or localhost:8000.
+The local-LAN guides below remain optional development alternatives.
+
 Use [the Wi-Fi uploader and setup guide](us100_wifi_upload/README.md) to send
 US-100 measurements without a USB-connected computer. The sketch uses the existing
 sensor API, which persists readings in Supabase and supplies the dashboard with

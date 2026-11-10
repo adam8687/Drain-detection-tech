@@ -32,6 +32,17 @@ test('firmware escapes credentials, carries sensor settings and refuses admin ke
   assert.throws(() => firmwareHeader({ ...config, allowHttp: false }, randomUUID(), 'dk_test'));
   assert.throws(() => firmwareHeader({ ...config, ssid: 'line\nfeed' }, randomUUID(), 'dk_test'));
 });
+test('cloud configuration needs no LAN address, requires TLS verification and preserves an explicit migration source',()=>{
+  const config=settings({}, {...wifi,CLOUD_API_URL:'https://test-project.supabase.co/functions/v1/drain-api'}, {});
+  assert.equal(config.local,config.base);assert.equal(config.cloud,true);
+  assert.throws(()=>firmwareHeader(config,randomUUID(),'dk_test'),/root CA/);
+  config.rootCa='-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n';
+  config.previousBase='http://192.168.1.20:8000';
+  const header=firmwareHeader(config,randomUUID(),'dk_test');
+  assert.ok(header.includes('constexpr bool ALLOW_LOCAL_HTTP = false;'));
+  assert.ok(header.includes('PREVIOUS_API_BASE_URL[] = "http://192.168.1.20:8000"'));
+  assert.throws(()=>settings({}, {...wifi,CLOUD_API_URL:'http://test-project.supabase.co/functions/v1/drain-api'},{}));
+});
 
 test('preflight reports the missing access migration without writes or credentials in URLs', async () => {
   const requests = [];

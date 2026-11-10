@@ -1,5 +1,9 @@
 # Supabase: one active table
 
+For ESP uploads without a Mac backend, follow [cloud setup](CLOUD-SETUP.md).
+It reuses this schema and shared calculations; no additional migration is needed
+after the recording and fixture-access migrations below have been applied.
+
 Run `migrations/202610270001_drain_records.sql` in your project's SQL Editor. Then apply `migrations/202610270002_records_access.sql` for the retained sign-in/device-access metadata. New projects need these two files. Existing projects may run it alongside the old schema; it does not modify or delete any `dm_*` table. It creates `drain_records`, indexes, Row Level Security, and the server-only atomic update function.
 
 Then use `npm run check:supabase`, optionally `npm run migrate:records` for legacy data, and `npm run seed:practice`. Keep all old writers stopped during conversion. The importer verifies each destination row, resumes unchanged partial copies and refuses conflicting overwrites. Keep legacy tables until you have reviewed the migration. They are backups, not part of the new application's storage path.

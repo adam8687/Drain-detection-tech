@@ -1,0 +1,6 @@
+project_id = "drain-monitor"
+
+[functions.drain-api]
+# Fixture keys are opaque tokens, not Supabase JWTs. The handler always verifies
+# admin, user, read-only viewer or fixture credentials before accessing data.
+verify_jwt = false

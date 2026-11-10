@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <LittleFS.h>
+#include <FFat.h>
 #include <Preferences.h>
 #include <esp_system.h>
 #include <esp_timer.h>
@@ -19,11 +19,19 @@ Preferences state;
 String pendingUrl, pendingBody;
 bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
-uint32_t lastAttempt = 0;
+uint32_t lastAttempt = 0, lastSample = 0;
+// Readings are journaled one by one, then uploaded together (server limit: 20).
+constexpr int BATCH_SIZE = 10;
+constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
+int batchCount = 0;
+bool batchReady = false;
+uint32_t lastStatus = 0;
+String stopReason;
 
 struct Reading { int distanceMm; const char* status; };
 
-void stop(const char* reason) {
+void stop(const String& reason) {
+  stopReason = reason;
   Serial.println(reason);
   stopped = true;
 }
@@ -43,7 +51,8 @@ Reading readSensor(int trigger, int echo, HardwareSerial& uart) {
     while (uart.available()) uart.read();
     uart.write(uint8_t(0x55));
     const uint32_t start = millis();
-    while (uart.available() < 2 && uint32_t(millis() - start) < 250) delay(1);
+    // Match the repository's standalone UART test response window exactly.
+    while (uart.available() < 2 && uint32_t(millis() - start) < 500) delay(1);
     if (uart.available() < 2) return {-1, "timeout"};
     const int high = uart.read(), low = uart.read();
     const int mm = high * 256 + low;
@@ -84,13 +93,16 @@ String timestamp() {
   return String(out);
 }
 
-bool savePending() {
-  File file = LittleFS.open("/pending.tmp", "w");
+// Journal format: line 1 = URL, then one measurement JSON per line. Appending a
+// line never rewrites earlier readings, so a power loss can only tear the newest
+// (not yet uploaded) line, which recovery ignores.
+bool journalPoint(const String& point, bool firstOfBatch) {
+  File file = FFat.open("/pending.txt", firstOfBatch ? "w" : "a");
   if (!file) return false;
-  const String data = pendingUrl + "\n" + pendingBody;
+  const String data = (firstOfBatch ? pendingUrl + "\n" : String("")) + point + "\n";
   const bool written = file.print(data) == data.length();
   file.flush(); file.close();
-  return written && LittleFS.rename("/pending.tmp", "/pending.txt");
+  return written;
 }
 
 void setup() {
@@ -114,18 +126,37 @@ void setup() {
     stop("HTTPS requires the backend's trusted root CA in API_ROOT_CA."); return;
   }
   // Formatting requires the explicit first-use opt-in in secrets.h.
-  if (!LittleFS.begin(INITIALIZE_EMPTY_FILESYSTEM) || !state.begin("drain-wifi", false)) {
+  if (!FFat.begin(INITIALIZE_EMPTY_FILESYSTEM) || !state.begin("drain-wifi", false)) {
     stop("Storage unavailable. See README for first-time filesystem initialization."); return;
   }
   recoveredRun = state.getString("started", "") == SENSOR_RECORD_ID;
-  if (LittleFS.exists("/pending.txt")) {
-    File file = LittleFS.open("/pending.txt", "r");
-    pendingUrl = file.readStringUntil('\n'); pendingBody = file.readString(); file.close();
+  if (FFat.exists("/pending.txt")) {
+    File file = FFat.open("/pending.txt", "r");
+    pendingUrl = file.readStringUntil('\n');
+    String lines = file.readString(); file.close();
+    String points;
+    if (lines.indexOf('\n') < 0 && lines.startsWith("{\"reading_id\":") && lines.endsWith("}")) lines += "\n";  // older single-point journal
+    while (lines.indexOf('\n') >= 0) {  // complete lines only; a torn final line is dropped
+      const int end = lines.indexOf('\n'); const String line = lines.substring(0, end); lines = lines.substring(end + 1);
+      if (!line.startsWith("{\"reading_id\":") || !line.endsWith("}")) { points = ""; break; }
+      points += (points.isEmpty() ? "" : ",") + line; batchCount++;
+    }
+    pendingBody = points.isEmpty() ? String("") : String("{\"measurements\":[") + points + "]}";
     const String expected = base + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
-    if (pendingUrl != expected || !pendingBody.startsWith("{\"reading_id\":") || !pendingBody.endsWith("}")) {
+    if (pendingUrl != expected && strlen(PREVIOUS_API_BASE_URL)) {
+      const String original = String(PREVIOUS_API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
+      if (pendingUrl == original) {
+        // Only migrate the endpoint for a verified SAME recording. Keep the old
+        // on-disk journal intact until cloud acknowledgement; retries stay exact.
+        pendingUrl = expected;
+        Serial.println("Recovering the original pending point to its verified cloud recording.");
+      }
+    }
+    if (pendingUrl != expected || pendingBody.isEmpty()) {
       stop("Pending point belongs to another destination or is damaged. Restore original configuration; do not erase it."); return;
     }
-    Serial.println("Recovering saved point with its original ID and timestamp.");
+    batchReady = true;  // a journaled batch is uploaded exactly as saved, never extended
+    Serial.println("Recovering saved point(s) with their original IDs and timestamps.");
   }
   if (USE_UART) {
     uartA.begin(9600, SERIAL_8N1, D0, D1);
@@ -139,8 +170,21 @@ void setup() {
 }
 
 void loop() {
-  if (stopped) { delay(1000); return; }
-  if (WiFi.status() != WL_CONNECTED) { delay(500); return; }
+  // USB serial reconnects after reset/upload. Repeat diagnostics so attaching
+  // later still reveals the problem, without printing credentials or payloads.
+  if (stopped) {
+    if (uint32_t(millis() - lastStatus) >= 5000) {
+      Serial.println(stopReason); lastStatus = millis();
+    }
+    delay(100); return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    if (uint32_t(millis() - lastStatus) >= 5000) {
+      Serial.printf("Waiting for Wi-Fi (status %d); station MAC: %s\n", int(WiFi.status()), WiFi.macAddress().c_str());
+      lastStatus = millis();
+    }
+    delay(500); return;
+  }
   if (!epochMs) {
     configTime(0, 0, "pool.ntp.org", "time.google.com");
     struct timeval now;
@@ -152,26 +196,39 @@ void loop() {
     if (now.tv_sec < 1767225600) { Serial.println("Waiting for an accurate UTC clock..."); return; }
     epochMs = int64_t(now.tv_sec) * 1000 + now.tv_usec / 1000;
     startUs = esp_timer_get_time();
-    Serial.println("Wi-Fi and UTC clock ready.");
+    Serial.printf("Wi-Fi and UTC clock ready. ESP IP: %s\n", WiFi.localIP().toString().c_str());
   }
-  if (pendingBody.isEmpty()) {
-    if (recoveredRun) {
+  if (!batchReady) {
+    if (pendingBody.isEmpty() && recoveredRun) {
       stop("Restart detected. Pending point recovered. Finish the old recording and configure a NEW record ID before sampling."); return;
     }
     if (state.getString("started", "") != SENSOR_RECORD_ID && state.putString("started", SENSOR_RECORD_ID) == 0) {
       stop("Could not save recording state."); return;
     }
+    const uint32_t sinceSample = millis() - lastSample;
+    if (sinceSample < SAMPLE_INTERVAL_MS) delay(SAMPLE_INTERVAL_MS - sinceSample);
+    lastSample = millis();
     const String time = timestamp();
     const Reading a = readSensor(D1, D0, uartA);
     Reading b = {-1, "timeout"};
     if (SECOND_SENSOR_ENABLED) { delay(70); b = readSensor(D3, D2, uartB); }
-    pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
-    pendingBody = String("{\"reading_id\":\"") + newId() + "\",\"timestamp\":\"" + time
+    const String point = String("{\"reading_id\":\"") + newId() + "\",\"timestamp\":\"" + time
       + "\",\"sensor_a\":" + sensorJson(a) + ",\"sensor_b\":" + sensorJson(b) + "}";
-    if (!savePending()) { stop("Could not persist the point; upload stopped."); return; }
+    const bool firstOfBatch = pendingBody.isEmpty();
+    if (firstOfBatch) {
+      pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
+      pendingBody = String("{\"measurements\":[") + point + "]}";
+    } else {
+      pendingBody.remove(pendingBody.length() - 2);  // reopen "]}"
+      pendingBody += "," + point + "]}";
+    }
+    batchCount++;
+    if (!journalPoint(point, firstOfBatch)) { stop("Could not persist the point; upload stopped."); return; }
+    if (batchCount < BATCH_SIZE) return;
+    batchReady = true;
   }
   const uint32_t elapsed = millis() - lastAttempt;
-  if (elapsed < 500) { delay(500 - elapsed); }
+  if (elapsed < 100) { delay(100 - elapsed); }
   lastAttempt = millis();
   WiFiClient plain; WiFiClientSecure secure; HTTPClient http;
   if (pendingUrl.startsWith("https://")) secure.setCACert(API_ROOT_CA);
@@ -181,26 +238,28 @@ void loop() {
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Bearer ") + SENSOR_KEY);
+  const uint32_t postStart = millis();
   const int code = http.POST(pendingBody);
+  const uint32_t postMs = millis() - postStart;
   // Current API returns a small canonical JSON acknowledgement, never the array.
   // Unexpected acknowledgements retain the point and stop instead of losing it.
   const String reply = (code == 200 || code == 201) ? http.getString() : String("");
   http.end();
+  if (code <= 0) { secure.stop(); plain.stop(); }
   if (code == 200 || code == 201) {
     const String recordField = String("\"record_id\":\"") + SENSOR_RECORD_ID + "\"";
     const bool finished = reply.indexOf("\"recording_status\":\"finished\"") >= 0;
     if (reply.indexOf(recordField) < 0 || (!finished && reply.indexOf("\"recording_status\":\"recording\"") < 0)) {
       stop("Unexpected acknowledgement; saved point retained for review."); return;
     }
-    if (!LittleFS.remove("/pending.txt")) { stop("Could not clear acknowledged point. Restart to retry safely."); return; }
-    pendingBody = ""; pendingUrl = "";
-    Serial.println("Saved measurement in Supabase.");
+    if (!FFat.remove("/pending.txt")) { stop("Could not clear acknowledged point. Restart to retry safely."); return; }
+    pendingBody = ""; pendingUrl = ""; batchCount = 0; batchReady = false;
+    Serial.printf("Saved batch in Supabase. (%u ms, RSSI %d dBm)\n", (unsigned)postMs, WiFi.RSSI());
     if (finished) stop("Recording finished. Create the next recording and update SENSOR_RECORD_ID.");
   } else if (code <= 0 || code == 408 || code == 429 || code >= 500) {
-    Serial.printf("Connection/server unavailable (%d). Retrying saved point; sampling paused.\n", code);
+    Serial.printf("Connection/server unavailable (%d) after %u ms, RSSI %d dBm. Retrying saved point; sampling paused.\n", code, (unsigned)postMs, WiFi.RSSI());
     delay(2000);
   } else {
-    Serial.printf("Upload stopped (HTTP %d). Check recording, fixture key and backend. Saved point retained.\n", code);
-    stopped = true;
+    stop(String("Upload stopped (HTTP ") + code + "). Check recording, fixture key and backend. Saved point retained.");
   }
 }
