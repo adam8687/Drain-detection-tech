@@ -45,9 +45,9 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
           {fixtureMatches.length ? fixtureMatches.map(f => <button key={f.id} onClick={() => { data.setFixture(f.id); setQuery(''); }}>{f.name}<small>{f.id}</small></button>) : <p>No matching units.</p>}
         </div>}
       </div>
-      <a className={`${styles.primary} ${styles.addUnit}`} href="/login">Add unit</a>
+      <a className={`${styles.primary} ${styles.addUnit}`} href="/add-unit">Add unit</a>
       <a className={styles.avatar} href="/login" aria-label="Your account"><img src={`${artwork}avatar.png`} width="40" height="40" alt="" /></a>
-      <MobileMenu><a href="/">Home</a><a href="/dashboard">Fleet / recordings</a><a href="/login">Account / add unit</a></MobileMenu>
+      <MobileMenu><a href="/">Home</a><a href="/dashboard">Fleet / recordings</a><a href="/add-unit">Add unit</a><a href="/login">Account</a></MobileMenu>
     </header>
 
     <main id="live-content" className={styles.content}>
