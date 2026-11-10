@@ -1,5 +1,16 @@
 # ESP32 sensor contract
 
+## Wi-Fi uploads (Arduino Nano ESP32)
+
+Use [the Wi-Fi uploader and setup guide](us100_wifi_upload/README.md) to send
+US-100 measurements without a USB-connected computer. The sketch uses the existing
+sensor API, which persists readings in Supabase and supplies the dashboard with
+backend-computed calibration, drainage times and alerts. No Arduino Supabase
+library or additional database table is needed.
+
+For repeatable bench testing with matching ports, generated firmware settings and
+real Supabase readback, use the [friend-testing scripts](wifi/README.md).
+
 ## USB bench tests (Arduino Nano ESP32)
 
 Start with one sensor and Serial Monitor at **115200 baud**:

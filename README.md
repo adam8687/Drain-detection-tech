@@ -25,6 +25,11 @@ npm --prefix web run build
 
 ## Run
 
+For physical sensors over Wi-Fi, follow the
+[scripted friend-testing checklist](device/wifi/README.md) (`wifi:init`,
+`wifi:start`, `wifi:check`, `wifi:prepare`, `wifi:watch`, `wifi:finish`).
+The board sends readings through the existing backend to Supabase and the dashboard.
+
 Terminal 1, repository root:
 
 ```sh

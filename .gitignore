@@ -14,3 +14,4 @@ coverage/
 .DS_Store
 
 *.tsbuildinfo
+device/us100_wifi_upload/secrets.h
