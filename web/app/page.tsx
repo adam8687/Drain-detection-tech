@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import styles from './page.module.css';
-import MobileMenu from '../components/mobile-menu';
+import ProductHeader from '../components/product-header';
+import DesignAsset from '../components/design-asset';
 
-const inter = Inter({ subsets: ['latin'], display: 'swap' });
-const artwork = '/images/marketing/';
+const artwork = '/images/design/';
 
 export const metadata: Metadata = {
   title: 'Smart Housing',
@@ -12,105 +11,85 @@ export const metadata: Metadata = {
 };
 
 const steps = [
-  { image: 'sensor.png', title: 'A sensor times every drain', description: 'A removable water-level sensor measures how quickly water recedes after each use.' },
-  { image: 'baseline.png', title: 'Software learns what’s normal', description: 'It adapts to each drain, including different starting water levels, so there are no false alarms.' },
-  { image: 'notification.png', title: 'You get the early warning', description: 'Persistent slowing is flagged while it’s still a nuisance, not an emergency.' },
+  { image: '453bd.svg', title: 'A sensor times every drain', description: 'A removable water-level sensor measures how quickly water recedes after each use.' },
+  { image: '6e7d6.svg', title: 'Software learns what’s normal', description: 'A quick empty-sink check establishes the reference. Usual drain times are learned during normal use.' },
+  { image: '2646e.svg', title: 'You get the early warning', description: 'Persistent slowing is flagged while it’s still a nuisance, not an emergency.' },
 ];
 
-function NavigationLinks() {
-  return <>
-    <a href="#how-it-works">How it works</a>
-    <a href="#for-hotels">For hotels</a>
-    <a href="/live-demo">Live demo</a>
-    <a href="/">Pricing</a>
-    <a href="/login" className={styles.login}>Log in</a>
-    <a href="/" className={styles.primary}>Book a demo</a>
-  </>;
+function HomeWaves({section}:{section:'hero'|'steps'|'hotel'|'footer'}) {
+ const slots={hero:[['96424.svg',964.51,-56.74],['75a5b.svg',488.76,416.94],['93eeb.svg',272.35,531.74],['8c3ad.svg',-50,613]],steps:[['2a790.svg',-107.1,490.14],['ff20c.svg',-92.09,558.58]],hotel:[['cf0fe.svg',-93.62,419.21],['94b40.svg',-86.41,491.67]],footer:[['e38ab.svg',-148,12]]} as const;
+ return <div className={styles.decor} aria-hidden="true">{slots[section].map(([file,left,top])=><div key={file} style={{left,top}}><DesignAsset file={file}/></div>)}</div>;
 }
-
-function WaterDivider() {
-  return <div className={styles.wave} aria-hidden="true">
-    <img src={`${artwork}wave.png`} width="1280" height="60" alt="" />
-  </div>;
-}
-
 export default function Home() {
-  return <div className={`${styles.page} ${inter.className}`}>
+  return <div className={styles.page}>
     <a href="#main" className={styles.skipLink}>Skip to content</a>
-    <header className={styles.header}>
-      <a href="/" className={styles.brand} aria-label="Company Name home">
-        <img src={`${artwork}logo.png`} width="32" height="32" alt="" />
-        <span>Company Name</span>
-      </a>
-      <nav className={styles.navigation} aria-label="Main navigation"><NavigationLinks /></nav>
-      <MobileMenu><NavigationLinks /></MobileMenu>
-    </header>
+    <ProductHeader marketing />
 
     <main id="main">
       <section className={styles.hero} aria-labelledby="hero-title">
+        <HomeWaves section="hero" />
+        <div className={styles.bubbles} aria-hidden="true">{[['6f715.svg',120,86],['0ed2c.svg',70,118],['0aea6.svg',1210,640],['dc225.svg',566,150],['3e6eb.svg',610,96],['1bd46.svg',122,88],['2e028.svg',73.6,121.6],['0b027.svg',1216,646],['a19d7.svg',568.8,152.8],['c3496.svg',615.2,101.2]].map(([file,left,top])=><div key={String(file)} style={{left:Number(left),top:Number(top)}}><DesignAsset file={file as '6f715.svg'}/></div>)}</div>
         <div className={styles.heroCopy}>
           <h1 id="hero-title">Catch the slow drain before it becomes a clog.</h1>
-          <p>Company Name times how fast every drain empties, learns what normal looks like, and tells you the moment one starts to slow.</p>
+          <p>Synk times how fast every drain empties, learns what normal looks like, and tells you the moment one starts to slow.</p>
           <div className={styles.actions}>
-            <a href="/" className={styles.primary}>Book a demo</a>
-            <a href="/" className={styles.secondary}>Watch the test rig</a>
+            <a href="#demo" className={styles.primary}>Book a demo</a>
+            <a href="/live-demo" className={styles.secondary}>Watch the test rig</a>
           </div>
         </div>
         <div className={styles.heroVisual}>
           <div className={styles.heroCanvas}>
-            <img className={styles.pipe} src={`${artwork}pipe-and-drip.png`} width="620" height="660" alt="A pipe dripping into water" />
+            <DesignAsset className={styles.pipe} file="8f4ff.svg" alt="Layered blue basin with water ripples and a connected sensor" />
             <div className={styles.alert} aria-label="Illustrative slow-drain alert">
               <div className={styles.alertTop}><span className={styles.tag}>Slow drain</span><span>just now</span></div>
-              <p className={styles.fixtureName}>Floor drain 3</p>
+              <p className={styles.fixtureName}>Room 108, Sink 1</p>
               <p className={styles.fixtureId}>DR-4824</p>
-              <div className={styles.alertValue}><strong>44</strong><span>s</span><img src={`${artwork}sparkline.png`} width="110" height="36" alt="" /></div>
-              <p className={styles.baseline}>+20 s vs baseline</p>
+              <div className={styles.alertValue}><strong>44</strong><span>s</span><DesignAsset file="d358c.svg"/></div>
+              <p className={styles.baseline}>+20 s vs usual time</p>
             </div>
           </div>
         </div>
       </section>
 
-      <WaterDivider />
       <section id="how-it-works" className={styles.howItWorks} aria-labelledby="how-title">
-        <div className={styles.sectionHeading}>
+        <HomeWaves section="steps" /><div className={styles.sectionHeading}>
           <h2 id="how-title">Spot the slowdown weeks before the clog.</h2>
-          <p>Guests and residents adapt to a draining-slower sink until it stops working. Company Name notices the change they don’t.</p>
+          <p>Guests and residents adapt to a draining-slower sink until it stops working. Synk notices the change they don’t.</p>
         </div>
         <div className={styles.steps}>
           {steps.map((step, index) => <article key={step.image} className={styles.step}>
-            <div className={styles.stepIllustration}><img src={`${artwork}${step.image}`} width="360" height="190" alt="" /></div>
+            <div className={styles.stepIllustration}><DesignAsset file={step.image as '453bd.svg'} /></div>
             <div className={styles.stepBody}>
               <h3><span className={styles.stepNumber}>{index + 1}</span>{step.title}</h3>
-              <p>{index === 1 ? <>It adapts to each drain, including different starting water levels, so there are no false <br className={styles.designBreak} />alarms.</> : step.description}</p>
+              <p>{step.description}</p>
             </div>
           </article>)}
         </div>
       </section>
 
       <section id="for-hotels" className={styles.hotels} aria-labelledby="hotels-title">
-        <div className={styles.hotelCopy}>
+        <div className={styles.sectionWave} aria-hidden="true"><DesignAsset file="78301.svg"/></div><HomeWaves section="hotel" /><div className={styles.hotelCopy}>
           <h2 id="hotels-title">Guests rarely report a slow drain. We do.</h2>
           <p>In a hotel nobody speaks up, so a failing drain is found at its worst, usually mid-stay. See every room’s drains on one screen and fix the worst ones first.</p>
-          <a className={styles.secondary} href="/">See the building heat map</a>
+          <a className={styles.secondary} href="/heat-map">See the building heat map</a>
         </div>
         <figure className={styles.heatMap}>
-          <div className={styles.hotelIllustration}><img src={`${artwork}hotel.png`} width="560" height="390" alt="Illustrative hotel cutaway showing drainage status by room" /></div>
+          <div className={styles.hotelIllustration}><DesignAsset file="86908.svg" alt="Illustrative hotel cutaway showing drainage status by room"/></div>
           <figcaption>Floor 3: 9 of 10 drains slowing. Likely a shared stack.</figcaption>
         </figure>
       </section>
 
-      <WaterDivider />
-      <section className={styles.cta} aria-labelledby="demo-title">
+      <section id="demo" className={styles.cta} aria-labelledby="demo-title">
         <div className={styles.ctaPanel}>
           <div className={styles.ctaCopy}>
             <h2 id="demo-title">See it catch a clog before the guests do.</h2>
-            <p>Our transparent test rig restricts a drain step by step. Watch Company Name recognize every stage.</p>
-            <a className={styles.primary} href="/">Book a demo</a>
+            <p>Our transparent test rig restricts a drain step by step. Watch Synk recognize every stage.</p>
+            <a className={styles.primary} href="/add-unit">Get started</a>
           </div>
-          <div className={styles.dropletBackdrop}><img src={`${artwork}droplet.png`} width="220" height="270" alt="" /></div>
+          <div className={styles.dropletBackdrop}><DesignAsset file="d206a.svg"/></div>
         </div>
       </section>
     </main>
-    <footer className={styles.footer}>© 2026 Placeholder name.</footer>
+    <footer className={styles.footer}><HomeWaves section="footer"/><span>© 2026 Synk.</span></footer>
   </div>;
 }

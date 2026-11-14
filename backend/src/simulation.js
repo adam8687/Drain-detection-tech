@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-export const SIMULATION_CALIBRATION = Object.freeze({ sensor_a_empty_mm: 400, sensor_b_empty_mm: 420 });
+export const SIMULATION_CALIBRATION = Object.freeze({ empty_distance_mm: 400 });
 export const SCENARIOS = ['normal', 'slow', 'pooling', 'timeout', 'gap', 'shallow', 'empty'];
 // Engineering fixture only: noise and changing drainage shape are illustrative,
 // not a validated fluid model or a prediction of US-100 hardware accuracy.
@@ -16,15 +16,13 @@ export function simulateMeasurements({ scenario = 'normal', start = Date.now(), 
     const seconds = elapsed / 1000;
     if (scenario === 'gap' && seconds > 15 && seconds < 23) continue;
     const point = { reading_id: makeId(sample), timestamp: new Date(start + elapsed).toISOString() };
-    for (const sensor of ['a', 'b']) {
-      const lag = sensor === 'b' ? scenario === 'pooling' ? 7 : 0.3 : 0;
-      const progress = Math.min(1, Math.max(0, seconds - lag) / duration);
-      const depth = scenario === 'empty' ? 0 : scenario === 'shallow' ? Math.max(0, 4 - seconds * 0.3) : 100 * (1 - progress) ** 1.35;
-      const noise = (random() - 0.5) * 2 + Math.sin(seconds * 2 + (sensor === 'b' ? 1 : 0)) * Math.exp(-seconds / 8);
-      const failed = scenario === 'timeout' && sensor === 'b' && seconds > 12 && seconds < 15;
-      const outOfRange = scenario === 'timeout' && sensor === 'a' && sample === 45;
-      point[`sensor_${sensor}`] = failed || outOfRange ? { distance_mm: null, status: outOfRange ? 'out_of_range' : 'timeout' } : { distance_mm: Math.round(SIMULATION_CALIBRATION[`sensor_${sensor}_empty_mm`] - depth + noise), status: 'ok' };
-    }
+    const durationWithTail=scenario==='pooling'?duration+7:duration;
+    const progress=Math.min(1,Math.max(0,seconds)/durationWithTail);
+    const depth=scenario==='empty'?0:scenario==='shallow'?Math.max(0,4-seconds*.3):100*(1-progress)**1.35;
+    const noise=(random()-.5)*2+Math.sin(seconds*2)*Math.exp(-seconds/8);
+    const failed=scenario==='timeout'&&seconds>12&&seconds<15;
+    const outOfRange=scenario==='timeout'&&sample===45;
+    point.sensor=failed||outOfRange?{distance_mm:null,status:outOfRange?'out_of_range':'timeout'}:{distance_mm:Math.round(SIMULATION_CALIBRATION.empty_distance_mm-depth+noise),status:'ok'};
     points.push(point);
   }
   return points;

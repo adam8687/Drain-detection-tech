@@ -23,7 +23,7 @@ async function api(path, value) {
 try {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(fixture)) throw Error('Use a fixture ID containing letters, digits, dashes or underscores.');
   if (!['monitoring', 'calibration', 'drainage'].includes(type)) throw Error('Choose monitoring, calibration or drainage.');
-  if (type === 'calibration' && !confirmEmpty) throw Error('Confirm the fixture is empty using --confirm-empty; both sensors must work.');
+  if (type === 'calibration' && !confirmEmpty) throw Error('Confirm the fixture is empty using --confirm-empty; the sensor must work.');
   const devices = await api('/devices');
   if (!devices.devices.some(d => d.device_id === fixture)) await api('/devices', { device_id: fixture, name: fixture });
   const listed = await api(`/records?fixture_id=${fixture}&data_source=sensor&recording_status=recording`);

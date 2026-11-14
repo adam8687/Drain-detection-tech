@@ -27,7 +27,7 @@ try {
   queue = new Outbox(':memory:');
   const request = { reading_id: randomUUID(), timestamp: new Date().toISOString() };
   const point = measurementFromReply(JSON.stringify({ reading_id: request.reading_id,
-    sensor_a: { distance_mm: 313, status: 'ok' }, sensor_b: { distance_mm: null, status: 'timeout' } }), request);
+    sensor: { distance_mm: 313, status: 'ok' } }), request);
   queue.enqueue(recordId, point);
   let saved = await uploadNext(queue, { base, token });
   assert.equal(saved.duplicate, false);

@@ -9,7 +9,9 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "test:product": "node tests/product-journey.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
@@ -21,6 +23,7 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "playwright": "^1.62.1",
     "typescript": "^7.0.2"
   }
 }

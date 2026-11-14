@@ -12,22 +12,22 @@
 #include <time.h>
 #include "secrets.h"
 
-// Sensor mode and sensor B availability are defined in secrets.h. Wi-Fi setup
-// scripts generate them from device/wifi/.env using the same bench pin mapping.
-HardwareSerial uartA(1), uartB(2);
+// Sensor mode is defined in secrets.h. Wi-Fi setup
+// scripts generate it from device/wifi/.env using the same bench pin mapping.
+HardwareSerial uartA(1);
 Preferences state;
 String pendingUrl, pendingBody;
 bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
 uint32_t lastAttempt = 0, lastSample = 0;
 // Readings are journaled one by one, then uploaded together (server limit: 20).
-constexpr int BATCH_SIZE = 10;       // used while uploads are slow (new TLS handshake each time)
+constexpr int BATCH_SIZE = 4;       // bound collection delay to two seconds before a slow TLS upload
 constexpr int FAST_BATCH_SIZE = 2;   // used while the HTTPS connection is being reused
 uint32_t lastPostMs = 100000;
 // Kept for the life of the sketch so the TLS connection can be reused (keep-alive).
 WiFiClient plainClient; WiFiClientSecure secureClient; HTTPClient http;
 bool caSet = false;
-constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
+constexpr uint32_t SAMPLE_INTERVAL_MS = 500;
 int batchCount = 0;
 bool batchReady = false;
 uint32_t lastStatus = 0;
@@ -165,10 +165,8 @@ void setup() {
   }
   if (USE_UART) {
     uartA.begin(9600, SERIAL_8N1, D0, D1);
-    if (SECOND_SENSOR_ENABLED) uartB.begin(9600, SERIAL_8N1, D2, D3);
   } else {
     pinMode(D1, OUTPUT); digitalWrite(D1, LOW); pinMode(D0, INPUT);
-    if (SECOND_SENSOR_ENABLED) { pinMode(D3, OUTPUT); digitalWrite(D3, LOW); pinMode(D2, INPUT); }
   }
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.println("Connecting to Wi-Fi...");
@@ -215,10 +213,8 @@ void loop() {
     lastSample = millis();
     const String time = timestamp();
     const Reading a = readSensor(D1, D0, uartA);
-    Reading b = {-1, "timeout"};
-    if (SECOND_SENSOR_ENABLED) { delay(70); b = readSensor(D3, D2, uartB); }
     const String point = String("{\"reading_id\":\"") + newId() + "\",\"timestamp\":\"" + time
-      + "\",\"sensor_a\":" + sensorJson(a) + ",\"sensor_b\":" + sensorJson(b) + "}";
+      + "\",\"sensor\":" + sensorJson(a) + "}";
     const bool firstOfBatch = pendingBody.isEmpty();
     if (firstOfBatch) {
       pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";

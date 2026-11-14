@@ -13,17 +13,17 @@ import { Outbox, measurementFromReply, uploadNext } from '../../device/usb-bridg
 
 const sensor = { distance_mm: 313, status: 'ok' };
 const missing = { distance_mm: null, status: 'timeout' };
-function reply(request, overrides = {}) { return JSON.stringify({ reading_id: request.reading_id, sensor_a: sensor, sensor_b: missing, ...overrides }); }
+function reply(request, overrides = {}) { return JSON.stringify({ reading_id: request.reading_id, sensor: sensor, ...overrides }); }
 function request() { return { reading_id: randomUUID(), timestamp: new Date().toISOString() }; }
 
 test('USB decoding preserves exact schema, request time and real missing sensor status', () => {
   const req = request();
   const point = measurementFromReply(reply(req), req);
-  assert.deepEqual(point, { ...req, sensor_a: sensor, sensor_b: missing });
+  assert.deepEqual(point, { ...req, sensor: sensor });
   assert.throws(() => measurementFromReply(reply(req, { reading_id: randomUUID() }), req));
   assert.throws(() => measurementFromReply(reply(req, { temperature_c: 20 }), req));
-  assert.throws(() => measurementFromReply(reply(req, { sensor_a: { distance_mm: 0, status: 'ok' } }), req));
-  assert.throws(() => measurementFromReply(reply(req, { sensor_b: { distance_mm: 0, status: 'timeout' } }), req));
+  assert.throws(() => measurementFromReply(reply(req, { sensor: { distance_mm: 0, status: 'ok' } }), req));
+  assert.throws(() => measurementFromReply(reply(req, { sensor: { distance_mm: 0, status: 'timeout' } }), req));
   assert.throws(() => measurementFromReply('Distance: 313 mm', req));
 });
 
@@ -39,7 +39,7 @@ test('USB outbox survives restart and keeps payload immutable after network fail
     queue.close(); queue = new Outbox(path);
     assert.equal(queue.pending(), 1); assert.equal(queue.next().body, before);
     queue.enqueue(record, point); assert.equal(queue.count(record), 1);
-    assert.throws(() => queue.enqueue(record, { ...point, sensor_a: { distance_mm: 314, status: 'ok' } }));
+    assert.throws(() => queue.enqueue(record, { ...point, sensor: { distance_mm: 314, status: 'ok' } }));
     await assert.rejects(uploadNext(queue, { base: 'http://test', fetcher: async () => new Response('{}', { status: 201 }) }));
     assert.equal(queue.pending(), 1);
   } finally { queue?.close(); rmSync(folder, { recursive: true, force: true }); }
@@ -67,14 +67,14 @@ test('USB uploads use fixture keys; lost acknowledgement retries produce one sto
   assert.equal(saved.duplicate, true); assert.equal(queue.pending(), 0);
   const stored = await api(`/records/${record.record_id}`);
   assert.equal(stored.record.data_source, 'sensor');
-  assert.deepEqual(stored.record.measurements, [{ ...req, sensor_a: sensor, sensor_b: missing }]);
+  assert.deepEqual(stored.record.measurements, [{ ...req, sensor: sensor }]);
   const simulation = await api('/records', { fixture_id: 'usb-test', record_type: 'monitoring', data_source: 'simulation' });
   const next = request(); queue.enqueue(simulation.record_id, measurementFromReply(reply(next), next));
   await assert.rejects(uploadNext(queue, options), error => error.retryable === false && error.message.includes('403'));
   assert.equal(queue.pending(), 1);
 });
 
-test('Mac serial launcher accepts fragmented device replies and exits cleanly', { skip: process.platform !== 'darwin', timeout: 20000 }, async t => {
+for (const follow of [false,true]) test(`Mac serial launcher accepts fragmented replies in ${follow ? 'automatic setup' : 'fixed recording'} mode`, { skip: process.platform !== 'darwin', timeout: 20000 }, async t => {
   const app = createApp({ ...configFromEnv({ STORAGE_BACKEND: 'sqlite', SQLITE_PATH: ':memory:' }), apiKey: 'serial-test' });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(() => app.close());
@@ -84,6 +84,13 @@ test('Mac serial launcher accepts fragmented device replies and exits cleanly', 
     body: JSON.stringify({ fixture_id: 'usb-pty-test', record_type: 'monitoring', data_source: 'sensor' }) });
   assert.equal(created.status, 201);
   const record = await created.json();
+  let sensorKey = 'serial-test';
+  if (follow) {
+    const headers = {'Content-Type':'application/json',Authorization:'Bearer serial-test'};
+    await fetch(`${base}/api/v1/devices`,{method:'POST',headers,body:JSON.stringify({device_id:'usb-pty-test',name:'Test sink'})});
+    const response = await fetch(`${base}/api/v1/devices/usb-pty-test/keys`,{method:'POST',headers,body:'{}'});
+    sensorKey = (await response.json()).key;
+  }
   const folder = mkdtempSync(join(tmpdir(), 'drain-usb-pty-'));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   // A device emulator, not physical sensor evidence. It deliberately fragments
@@ -100,7 +107,7 @@ while True:
     while b'\\n' in buffer:
         line, buffer = buffer.split(b'\\n', 1)
         if not line.startswith(b'READ '): continue
-        reply = json.dumps({'reading_id': line[5:].decode().strip(), 'sensor_a': {'distance_mm': 313, 'status': 'ok'}, 'sensor_b': {'distance_mm': None, 'status': 'timeout'}}).encode() + b'\\n'
+        reply = json.dumps({'reading_id': line[5:].decode().strip(), 'sensor': {'distance_mm': 313, 'status': 'ok'}}).encode() + b'\\n'
         os.write(master, reply[:21])
         time.sleep(.02)
         os.write(master, reply[21:])
@@ -112,23 +119,56 @@ while True:
     python.stdout.on('data', chunk => { text += chunk; if (text.includes('\n')) resolve(text.split('\n')[0].trim()); });
     python.once('exit', code => reject(Error(`Pseudo-terminal setup exited (${code})`)));
   });
-  const runner = spawn(process.execPath, [fileURLToPath(new URL('../../device/usb-bridge/run.js', import.meta.url)), port], {
-    env: { ...process.env, API_BASE_URL: base, SENSOR_RECORD_ID: record.record_id, SENSOR_KEY: 'serial-test', SENSOR_OUTBOX: join(folder, 'outbox.sqlite') },
+  const runner = spawn(process.execPath, [fileURLToPath(new URL('../../device/usb-bridge/run.js', import.meta.url)), port, ...(follow ? ['--follow'] : [])], {
+    env: { ...process.env, API_BASE_URL: base, SENSOR_RECORD_ID: record.record_id, SENSOR_KEY: sensorKey, SENSOR_OUTBOX: join(folder, 'outbox.sqlite') },
   });
   t.after(() => runner.kill('SIGKILL'));
-  let output = '';
+  let output = '', transitioned = false, nextId, transitionError;
   runner.stdout.on('data', chunk => {
     output += chunk;
-    if (output.includes('Saved ')) runner.kill('SIGINT');
+    if (output.includes('Saved ') && !transitioned) {
+      transitioned = true;
+      if (!follow) runner.kill('SIGINT');
+      else void (async()=>{
+        const headers={'Content-Type':'application/json',Authorization:'Bearer serial-test'};
+        await fetch(`${base}/api/v1/records/${record.record_id}/finish`,{method:'POST',headers,body:'{}'});
+        const response=await fetch(`${base}/api/v1/records`,{method:'POST',headers,body:JSON.stringify({fixture_id:'usb-pty-test',record_type:'monitoring',data_source:'sensor'})});
+        assert.equal(response.status,201);nextId=(await response.json()).record_id;
+        for(let attempt=0;attempt<100;attempt++){
+          if((await app.store.get(nextId)).measurements.length){runner.kill('SIGINT');return;}
+          await new Promise(r=>setTimeout(r,50));
+        }
+        throw Error('Uploader did not follow the next setup step');
+      })().catch(error=>{transitionError=error;runner.kill('SIGINT');});
+    }
   });
   runner.stderr.on('data', chunk => { output += chunk; });
   const [exitCode] = await once(runner, 'exit');
+  assert.equal(transitionError,undefined);
   assert.equal(exitCode, 0, output);
-  assert.match(output, /A=313, B=timeout/);
+  assert.match(output, /sensor=313/);
   const stored = await app.store.get(record.record_id);
-  assert.equal(stored.measurements.length, 1);
-  assert.deepEqual(stored.measurements[0].sensor_a, sensor);
-  assert.deepEqual(stored.measurements[0].sensor_b, missing);
+  assert.ok(stored.measurements.length >= 1);
+  if(follow)assert.ok((await app.store.get(nextId)).measurements.length>=1);
+  else assert.equal(stored.measurements.length,1);
+  assert.deepEqual(stored.measurements[0].sensor, sensor);
+
   const queue = new Outbox(join(folder, 'outbox.sqlite'));
   assert.equal(queue.pending(), 0); queue.close();
+});
+
+test('automatic setup retains late readings locally and continues without retargeting or a false acknowledgment',async()=>{
+ const queue=new Outbox(':memory:'), old=randomUUID(), next=randomUUID();
+ const p={reading_id:randomUUID(),timestamp:new Date().toISOString(),sensor:sensor};
+ queue.enqueue(old,p);
+ const finished=async()=>Response.json({error:{code:'record_finished',message:'Recording is finished'}},{status:409});
+ await assert.rejects(()=>uploadNext(queue,{base:'https://example.test',fetcher:finished}),e=>e.retryable===false);
+ assert.equal(queue.pending(),1);assert.equal(queue.rejected(),0);
+ const rejected=await uploadNext(queue,{base:'https://example.test',fetcher:finished,follow:true});
+ assert.equal(rejected.rejected,true);assert.equal(rejected.record_id,old);assert.equal(queue.pending(),0);assert.equal(queue.rejected(),1);
+ const retained=queue.db.prepare('SELECT * FROM usb_outbox WHERE reading_id=?').get(p.reading_id);
+ assert.equal(retained.acknowledged,0);assert.equal(retained.record_id,old);assert.deepEqual(JSON.parse(retained.body),p);
+ const later={...p,reading_id:randomUUID()};queue.enqueue(next,later);
+ await uploadNext(queue,{base:'https://example.test',follow:true,fetcher:async()=>Response.json({record_id:next,duplicate:false,recording_status:'recording'},{status:201})});
+ assert.equal(queue.pending(),0);assert.equal(queue.rejected(),1);queue.close();
 });

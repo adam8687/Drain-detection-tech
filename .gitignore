@@ -16,3 +16,6 @@ coverage/
 *.tsbuildinfo
 device/us100_wifi_upload/secrets.h
 supabase/.temp/
+
+.next-product-test/
+supabase/backups/

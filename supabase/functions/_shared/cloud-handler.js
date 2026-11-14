@@ -1,10 +1,13 @@
+import {validateDrainageAction,updateDrainageCalibration} from './drainage-calibration.js';
+import {createEmailNotifications,emailCandidates,emailReferenceSamples,verifiedUserEmail} from './email-notifications.js';
+import {SupabaseEmailStore} from './email-storage.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
 import { hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { SupabaseRecordStore } from './records-storage.js';
 import { SupabaseAccessStore } from './access-storage.js';
-import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, drainStatuses, fail } from './records-domain.js';
+import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, boundedRecordView, drainStatuses, statusContext, withDrainageProfile, drainCycleSummaries, fail } from './records-domain.js';
 import { buildAlerts, summarizeAlerts, SEVERITIES } from './alerts.js';
 
 const equalToken = (a, b) => timingSafeEqual(Buffer.from(hashDeviceKey(a)), Buffer.from(hashDeviceKey(b)));
@@ -27,8 +30,11 @@ async function readBody(request) {
 export function createCloudHandler(config, {
   store = new SupabaseRecordStore(config.url, config.serviceKey),
   accessStore = new SupabaseAccessStore(config.url, config.serviceKey),
+  clock = ()=>Date.now(),
   verifyUser = supabaseUserVerifier(config.url, config.serviceKey),
+  notifications = createEmailNotifications({config:config.email??{enabled:false},deliveryStore:new SupabaseEmailStore(config.url,config.serviceKey),accessStore,userEmail:verifiedUserEmail(config.url,config.serviceKey)}),
 } = {}) {
+  if(config.emailWorkerToken&&config.emailWorkerToken.length<32)throw Error('Email worker token must have at least 32 characters');
   if (config.adminToken && config.adminToken.length < 32) throw Error('Cloud admin token must have at least 32 characters');
   const get = async id => { const row = await store.get(uuid(id, 'record_id')); if (!row) throw new ApiError(404, 'record_not_found', 'Recording not found'); return row; };
   const authorize = async request => {
@@ -36,6 +42,7 @@ export function createCloudHandler(config, {
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
     const denied = () => new ApiError(401, 'unauthorized', 'Sign in or supply a valid fixture token');
     if (!token) throw denied();
+    if(config.emailWorkerToken&&equalToken(token,config.emailWorkerToken))return{emailWorker:true};
     if (config.adminToken && equalToken(token, config.adminToken)) return { admin: true };
     if (token.startsWith('dk_') || token.startsWith('dv_')) {
       const key = await accessStore.get('device_keys', hashDeviceKey(token));
@@ -72,7 +79,7 @@ export function createCloudHandler(config, {
     return store.list(filters, limit);
   };
   const mutate = async (id, transform) => {
-    for (let n = 0; n < 12; n++) { const previous = await get(id), response = transform(previous); if (response.record === previous || await store.compareAndSet(previous, response.record)) return response; }
+    for (let n = 0; n < 12; n++) { const previous = await get(id), response = transform(previous);if(response.record===previous)return response;const events=notifications.enabled&&emailCandidates(response.record).length?await (async()=>{const profiled=await withDrainageProfile(store,response.record);return emailCandidates(profiled,[profiled],Date.now(),await notifications.references(response.record.fixture_id));})():[];if(await store.compareAndSet(previous,response.record,events,notifications.enabled?emailReferenceSamples(response.record):[])){if(events.length)notifications.kick(config.waitUntil);return response;} }
     throw new ApiError(409, 'concurrent_update', 'Recording is busy; retry with the same reading_id');
   };
   return async request => {
@@ -91,6 +98,21 @@ export function createCloudHandler(config, {
         return json(200, { status: 'ok', schema: 'drain_records', storage: 'supabase', auth_required: true, runtime: 'supabase-edge' });
       }
       const who = await authorize(request);
+      if(who.emailWorker&&(path!=='/api/v1/internal/email-deliveries'||request.method!=='POST'))throw new ApiError(403,'forbidden','Worker access is restricted to email delivery');
+      if(path==='/api/v1/internal/email-deliveries'&&request.method==='POST'){
+        if(!who.admin&&!who.emailWorker)throw new ApiError(403,'forbidden','Worker access required');return json(200,await notifications.flush());
+      }
+      const emailSettings=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/notifications$/);
+      if(emailSettings&&['GET','POST'].includes(request.method)){
+        if(!who.userId)throw new ApiError(403,'forbidden','Sign in as the unit owner');const fixture=deviceId(emailSettings[1]);await access(who,fixture,true);
+        if(request.method==='GET')return json(200,await notifications.preference(fixture,who.userId));
+        try{return json(200,await notifications.savePreference(fixture,who.userId,await readBody(request)));}catch(error){if(error instanceof ApiError)throw error;fail(error.message);}
+      }
+      if (path === '/api/v1/sensor/active-record' && request.method === 'GET') {
+        if (!who.deviceId) throw new ApiError(403, 'forbidden', 'Use the fixture sensor key for automatic recording selection');
+        const row = (await (store.headers?.bind(store) ?? store.list.bind(store))({fixture_id:who.deviceId,data_source:'sensor',recording_status:'recording'},1))[0];
+        return json(200, {record:row ? {record_id:row.record_id,record_type:row.record_type,fixture_id:row.fixture_id} : null});
+      }
       if (path === '/api/v1/devices') {
         if (who.deviceId) throw new ApiError(403, 'forbidden', 'Sensor keys cannot access the registry');
         if (request.method === 'GET') {
@@ -118,8 +140,8 @@ export function createCloudHandler(config, {
       }
       if (path === '/api/v1/records' && request.method === 'POST') {
         const input = validateRecordInput(await readBody(request)); await access(who, input.fixture_id, true);
-        const latest = (await store.list({ fixture_id: input.fixture_id, data_source: input.data_source, record_type: 'calibration', recording_status: 'finished', calibration_present: true },1))[0];
-        const calibration = input.record_type === 'calibration' ? null : latest?.calibration ?? null;
+        const latest = (await store.list({ fixture_id: input.fixture_id, data_source: input.data_source, record_type: 'calibration', recording_status: 'finished', calibration_present: true, schema_version:2 },1))[0];
+        const calibration = input.record_type === 'calibration' || !latest?.calibration ? null : {empty_distance_mm:latest.calibration.empty_distance_mm};
         if (input.record_type === 'drainage' && !calibration) throw new ApiError(409,'calibration_required','Complete empty-fixture calibration first');
         return json(201, await store.insert({ ...input, record_id: randomUUID(), recording_status: 'recording', calibration, measurements: [], result: null, created_at: new Date().toISOString() }));
       }
@@ -132,18 +154,28 @@ export function createCloudHandler(config, {
         const severity = url.searchParams.get('severity');
         if (path.endsWith('/alerts') && severity !== null && !SEVERITIES.includes(severity)) fail('Invalid severity');
         const rows = await visible(who, filters, path.endsWith('/alerts') ? 200 : limit);
-        if (path.endsWith('/alerts')) { const all = buildAlerts(rows); return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => !severity || a.severity === severity).slice(0,limit), generated_at: new Date().toISOString() }); }
-        const statuses = drainStatuses(rows);
-        return json(200, { records: rows.map(({measurements,...row}) => ({...row, measurement_count:measurements.length, drain_status:statuses.get(row.record_id) ?? null})) });
+        if (path.endsWith('/alerts')) { const all = buildAlerts(await statusContext(store, rows)); return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => !severity || a.severity === severity).slice(0,limit), generated_at: new Date().toISOString() }); }
+        const statuses = drainStatuses(await statusContext(store, rows));
+        return json(200, { records: rows.map(({measurements,...row}) => ({...row, measurement_count:measurements.length, drain_cycles:drainCycleSummaries({...row,measurements}), drain_status:statuses.get(row.record_id) ?? null})) });
       }
-      const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish))?$/i);
+      const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish|drainage-calibration))?$/i);
       if (match) {
         const [, id, action] = match; const row = await get(id);
         if (!action && request.method === 'GET') {
           await access(who, row.fixture_id); const raw = url.searchParams.get('sample'), sample = raw === null ? null : Number(raw);
           if (sample !== null && (!Number.isInteger(sample) || sample < 0)) fail('sample must be nonnegative integer');
-          const siblings = row.record_type === 'drainage' ? await store.list({fixture_id:row.fixture_id,data_source:row.data_source,record_type:'drainage'},200) : [];
-          return json(200, { record: row, computed: {...computedView(row,sample), drain_status:drainStatuses([...siblings.filter(r=>r.record_id!==id),row]).get(id) ?? null} });
+          const siblings = ['drainage','monitoring'].includes(row.record_type) ? await store.list({fixture_id:row.fixture_id,data_source:row.data_source},5) : [];
+          const view=boundedRecordView(row,sample,url.searchParams.has('window')?Number(url.searchParams.get('window')):null,url.searchParams.get('after'));
+          return json(200, {...view,computed:{...view.computed,drain_status:drainStatuses(await statusContext(store,[...siblings.filter(r=>r.record_id!==id),row])).get(id)??null}});
+        }
+        if(action==='drainage-calibration'&&request.method==='POST'){
+          await access(who,row.fixture_id,true);
+          const input=validateDrainageAction(await readBody(request)),captureId=randomUUID();
+          const observationId=input.recording_id??row.calibration?.drainage?.active_capture?.recording_id;
+          const observation=observationId?await get(observationId):null;
+          if(observation)await access(who,observation.fixture_id,true);
+          const result=await mutate(id,previous=>({record:updateDrainageCalibration(previous,observation,input,captureId,clock())}));
+          return json(200,{record_id:id,calibration:result.record.calibration});
         }
         if (action === 'measurements' && request.method === 'POST') {
           await access(who,row.fixture_id,false,true);

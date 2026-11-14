@@ -1,0 +1,35 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="364" height="200" viewBox="0 0 364 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Drain curves illustration">
+<path id="Vector" d="M10 20H354" stroke-width="1.5" stroke="#A8D3F0"/>
+<path id="Vector_2" d="M10 95H354" stroke-width="1.5" stroke="#A8D3F0"/>
+<path id="Vector_3" d="M10 170H354" stroke-width="1.5" stroke="#A8D3F0"/>
+<path id="Vector_4" d="M10 20C10.9146 20.7317 11.8367 21.4809 12.7664 22.2477M354 170H350.399M17.4375 26.1937C19.1976 27.7147 20.9832 29.2954 22.7945 30.9358M27.2883 35.0791C28.9885 36.6738 30.7103 38.3187 32.4536 40.014M36.8212 44.3212C38.4706 45.9701 40.1386 47.6622 41.825 49.3975M46.066 53.8114C47.6807 55.5106 49.3118 57.2481 50.9593 59.0237M55.1047 63.5344C56.6844 65.2693 58.2787 67.0382 59.8876 68.8412M63.945 73.4248C65.4938 75.1884 67.0556 76.9825 68.6306 78.8072M72.6157 83.4566C74.1397 85.2468 75.6756 87.0648 77.2234 88.9107M81.1444 93.6155C82.646 95.4281 84.1585 97.2663 85.682 99.13M89.5464 103.883C91.0279 105.715 92.5195 107.571 94.0213 109.45M97.8363 114.247C99.2999 116.096 100.773 117.967 102.255 119.861M106.02 124.689C107.466 126.552 108.921 128.435 110.385 130.339M114.103 135.194C115.534 137.071 116.974 138.966 118.422 140.881M122.107 145.773C123.526 147.662 124.952 149.57 126.386 151.496M130.042 156.422C131.446 158.32 132.857 160.234 134.275 162.165M137.887 167.099C138.589 168.062 139.294 169.029 140 170H143.601M149.774 170H156.976M163.149 170H170.351M176.524 170H183.726M189.899 170H197.101M203.274 170H210.476M216.649 170H223.851M230.024 170H237.226M243.399 170H250.601M256.774 170H263.976M270.149 170H277.351M283.524 170H290.726M296.899 170H304.101M310.274 170H317.476M323.649 170H330.851M337.024 170H344.226" stroke-width="3" stroke="#6BAAE0"/>
+<path id="Vector_5" d="M10 20C103.333 26.6667 181.667 76.6667 245 170H354" stroke-width="4.5" stroke-linecap="round" stroke="#2563AE"/>
+<g id="Vector_6" filter="url(#filter0_d_0_41)">
+<path d="M140 177C143.866 177 147 173.866 147 170C147 166.134 143.866 163 140 163C136.134 163 133 166.134 133 170C133 173.866 136.134 177 140 177Z" fill="#6BAAE0"/>
+</g>
+<g id="Vector_7" filter="url(#filter1_d_0_41)">
+<path d="M245 178C249.418 178 253 174.418 253 170C253 165.582 249.418 162 245 162C240.582 162 237 165.582 237 170C237 174.418 240.582 178 245 178Z" fill="#2563AE"/>
+</g>
+</g>
+<defs>
+<filter id="filter0_d_0_41" x="130" y="162" width="20" height="20" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="2"/>
+<feGaussianBlur stdDeviation="1.5"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.28 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_41"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_41" result="shape"/>
+</filter>
+<filter id="filter1_d_0_41" x="234" y="161" width="22" height="22" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="2"/>
+<feGaussianBlur stdDeviation="1.5"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.28 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_41"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_41" result="shape"/>
+</filter>
+</defs>
+</svg>

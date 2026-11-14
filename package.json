@@ -29,6 +29,9 @@
     "check:supabase": "npm --prefix backend run check:supabase",
     "verify:supabase": "npm --prefix backend run verify:supabase",
     "seed:practice": "npm --prefix backend run seed:practice",
-    "migrate:records": "npm --prefix backend run migrate:records"
+    "migrate:records": "npm --prefix backend run migrate:records",
+    "auth:setup": "node scripts/auth-setup.mjs",
+    "email:retry": "node --env-file-if-exists=supabase/.env.cloud scripts/email-retry.mjs",
+    "egress:estimate": "node scripts/egress-estimate.mjs"
   }
 }

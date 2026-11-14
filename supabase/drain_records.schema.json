@@ -73,6 +73,18 @@
       "type": "string",
       "format": "date-time",
       "description": "Backend-assigned ordering metadata; not a sensor input."
+    },
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ],
+      "description": "Server metadata. Version 1 marks converted historical two-sensor results; current single-sensor records are version 2 (omitted from public responses)."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Database-managed version for compact cache validation; not a sensor input."
     }
   },
   "$defs": {
@@ -123,8 +135,7 @@
       "required": [
         "reading_id",
         "timestamp",
-        "sensor_a",
-        "sensor_b"
+        "sensor"
       ],
       "properties": {
         "reading_id": {
@@ -135,10 +146,7 @@
           "type": "string",
           "format": "date-time"
         },
-        "sensor_a": {
-          "$ref": "#/$defs/sensor"
-        },
-        "sensor_b": {
+        "sensor": {
           "$ref": "#/$defs/sensor"
         }
       }
@@ -147,19 +155,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "sensor_a_empty_mm",
-        "sensor_b_empty_mm"
+        "empty_distance_mm"
       ],
       "properties": {
-        "sensor_a_empty_mm": {
+        "empty_distance_mm": {
           "type": "number",
           "minimum": 20,
           "maximum": 4500
         },
-        "sensor_b_empty_mm": {
-          "type": "number",
-          "minimum": 20,
-          "maximum": 4500
+        "drainage": {
+          "$ref": "#/$defs/drainage_calibration"
         }
       }
     },
@@ -184,6 +189,533 @@
             "incomplete",
             "uncertain"
           ]
+        }
+      }
+    },
+    "drainage_band": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from_depth_mm",
+        "to_depth_mm",
+        "duration_seconds"
+      ],
+      "properties": {
+        "from_depth_mm": {
+          "enum": [
+            30,
+            25,
+            20,
+            15
+          ]
+        },
+        "to_depth_mm": {
+          "enum": [
+            25,
+            20,
+            15,
+            10
+          ]
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 86400
+        }
+      }
+    },
+    "drainage_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "recording_id",
+        "from_reading_id",
+        "to_reading_id",
+        "confirmed_at",
+        "ended_at",
+        "duration_seconds",
+        "recession_mm_per_second",
+        "uncertainty_seconds",
+        "sample_count",
+        "bands"
+      ],
+      "properties": {
+        "capture_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recording_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_reading_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "to_reading_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "confirmed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 86400
+        },
+        "recession_mm_per_second": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 20000
+        },
+        "uncertainty_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 5000
+        },
+        "bands": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/drainage_band"
+          }
+        }
+      }
+    },
+    "drainage_capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "recording_id",
+        "from_reading_id",
+        "confirmed_at",
+        "tap_off_confirmed",
+        "clear_drain_confirmed"
+      ],
+      "properties": {
+        "capture_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recording_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_reading_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "confirmed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tap_off_confirmed": {
+          "const": true
+        },
+        "clear_drain_confirmed": {
+          "const": true
+        }
+      }
+    },
+    "drainage_calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "method",
+        "status",
+        "upper_depth_mm",
+        "lower_depth_mm",
+        "runs",
+        "active_capture",
+        "baseline_duration_seconds",
+        "baseline_recession_mm_per_second",
+        "bands",
+        "repeatability_ratio",
+        "measured_at",
+        "last_issue"
+      ],
+      "properties": {
+        "version": {
+          "enum": [
+            1,
+            2
+          ],
+          "description": "1 predates profiles; 2 stores the sink profile once ready."
+        },
+        "method": {
+          "const": "tap_off_drawdown"
+        },
+        "status": {
+          "enum": [
+            "collecting",
+            "ready"
+          ]
+        },
+        "upper_depth_mm": {
+          "const": 30
+        },
+        "lower_depth_mm": {
+          "const": 10
+        },
+        "runs": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/drainage_run"
+          }
+        },
+        "active_capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/drainage_capture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline_duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 86400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline_recession_mm_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bands": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/drainage_band"
+          }
+        },
+        "repeatability_ratio": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 3.001
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measured_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_issue": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 250
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "description": "Version 2 only. Null until two clear-drain tap-off runs agree.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/drainage_profile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ready"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "runs": {
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "active_capture": {
+                "type": "null"
+              },
+              "baseline_duration_seconds": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 86400
+              },
+              "baseline_recession_mm_per_second": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 20000
+              },
+              "bands": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {
+                  "$ref": "#/$defs/drainage_band"
+                }
+              },
+              "repeatability_ratio": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1.301
+              },
+              "measured_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "runs": {
+                "maxItems": 1
+              },
+              "baseline_duration_seconds": {
+                "type": "null"
+              },
+              "baseline_recession_mm_per_second": {
+                "type": "null"
+              },
+              "bands": {
+                "maxItems": 0
+              },
+              "repeatability_ratio": {
+                "type": "null"
+              },
+              "measured_at": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drainage_profile": {
+      "description": "Per-sink expected drainage and alert thresholds captured from a drain known to be clear. Depth bands, not volume.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clear_drain_confirmed",
+        "resolution",
+        "noise_seconds",
+        "variation_seconds",
+        "policy",
+        "bands",
+        "total"
+      ],
+      "properties": {
+        "clear_drain_confirmed": {
+          "const": true
+        },
+        "noise_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "variation_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "slow_ratio",
+            "severe_ratio",
+            "repeat_count",
+            "repeat_window",
+            "standing_water_margin_seconds",
+            "min_slow_seconds",
+            "min_severe_seconds"
+          ],
+          "properties": {
+            "slow_ratio": {
+              "type": "number",
+              "minimum": 1.1,
+              "maximum": 5
+            },
+            "severe_ratio": {
+              "type": "number",
+              "minimum": 1.1,
+              "maximum": 10
+            },
+            "repeat_count": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 5
+            },
+            "repeat_window": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 10
+            },
+            "standing_water_margin_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 3600
+            },
+            "min_slow_seconds": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 300,
+              "description": "Predetermined floor for slow over the 30-10 mm range."
+            },
+            "min_severe_seconds": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 900,
+              "description": "Predetermined floor for severe over the 30-10 mm range."
+            }
+          }
+        },
+        "bands": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "from_depth_mm",
+              "to_depth_mm",
+              "expected_seconds",
+              "variation_seconds",
+              "tolerance_seconds",
+              "slow_seconds"
+            ],
+            "properties": {
+              "from_depth_mm": {
+                "enum": [
+                  30,
+                  25,
+                  20,
+                  15
+                ]
+              },
+              "to_depth_mm": {
+                "enum": [
+                  25,
+                  20,
+                  15,
+                  10
+                ]
+              },
+              "expected_seconds": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 86400
+              },
+              "variation_seconds": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 86400
+              },
+              "tolerance_seconds": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 86400
+              },
+              "slow_seconds": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 432000
+              }
+            }
+          }
+        },
+        "total": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expected_seconds",
+            "tolerance_seconds",
+            "slow_seconds",
+            "severe_seconds",
+            "standing_water_seconds"
+          ],
+          "properties": {
+            "expected_seconds": {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 86400
+            },
+            "tolerance_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 86400
+            },
+            "slow_seconds": {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 432000
+            },
+            "severe_seconds": {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 432000
+            },
+            "standing_water_seconds": {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 432000
+            }
+          }
+        },
+        "resolution": {
+          "enum": [
+            "banded",
+            "instant"
+          ],
+          "description": "instant: the drain empties faster than readings resolve; judged by the predetermined floors."
         }
       }
     }

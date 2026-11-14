@@ -9,7 +9,9 @@ import { uuid } from '../../backend/src/validation.js';
 const args = process.argv.slice(2);
 const base = (process.env.API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 const token = process.env.SENSOR_KEY || process.env.API_KEY || '';
-const record = process.env.SENSOR_RECORD_ID;
+const follow = args.includes('--follow');
+let record = follow ? null : process.env.SENSOR_RECORD_ID;
+let lastDiscovery = 0;
 let running = true, fatal = false, pendingRequest = null, outbox, serial, worker, reader;
 const stop = () => { running = false; };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
@@ -21,10 +23,11 @@ try {
     process.exit(0);
   }
   if (process.platform !== 'darwin') throw Error('This USB launcher currently supports macOS.');
-  uuid(record, 'SENSOR_RECORD_ID');
+  if (follow && !token.startsWith('dk_')) throw Error('Automatic setup needs the fixture sensor key (dk_).');
+  if (!follow) uuid(record, 'SENSOR_RECORD_ID');
   if (token.startsWith('sb_') || token.split('.').length === 3) throw Error('Use the fixture sensor key, not a Supabase key or browser sign-in token.');
   const available = await usbPorts();
-  const port = args[0] || process.env.SENSOR_PORT || (available.length === 1 ? available[0] : '');
+  const port = args.find(arg => !arg.startsWith('--')) || process.env.SENSOR_PORT || (available.length === 1 ? available[0] : '');
   if (!port && !available.length) throw Error('No USB Arduino port found. Connect the board with a USB data cable.');
   // ttys devices also allow a local pseudo-terminal to exercise this exact loop.
   if (!port || !/^\/dev\/(cu\.(usbmodem|usbserial)[\w.-]*|ttys\d+)$/.test(port)) throw Error('Pass the USB port, e.g. npm run device:upload -- /dev/cu.usbmodemXXXX');
@@ -43,7 +46,7 @@ try {
       return;
     }
     try {
-      outbox.enqueue(record, point); // Persist before any HTTP attempt.
+      outbox.enqueue(pendingRequest.record_id, point); // Persist before any HTTP attempt.
       pendingRequest = null;
     } catch {
       console.error('Could not save a reading to the local outbox. Stopping acquisition; check disk space and permissions.');
@@ -73,11 +76,15 @@ try {
   const uploadLoop = async () => {
     while (running) {
       try {
-        const saved = await uploadNext(outbox, { base, token });
+        const saved = await uploadNext(outbox, { base, token, follow });
         if (saved) {
           const p = saved.point;
-          console.log(`Saved ${p.timestamp}: A=${p.sensor_a.distance_mm ?? p.sensor_a.status}, B=${p.sensor_b.distance_mm ?? p.sensor_b.status}${saved.duplicate ? ' (retry confirmed)' : ''}`);
-          if (saved.recording_status === 'finished' && saved.record_id === record) { console.log('Recording finished. Start a new recording before collecting more.'); stop(); }
+          if (saved.rejected) console.log('The setup step ended before this reading arrived. Kept locally; following the next step.');
+          else console.log(`Saved ${p.timestamp}: sensor=${p.sensor.distance_mm ?? p.sensor.status}${saved.duplicate ? ' (retry confirmed)' : ''}`);
+          if (saved.recording_status === 'finished' && saved.record_id === record) {
+            if (follow) { record = null; pendingRequest = null; console.log('Step complete. Waiting for the next setup step…'); }
+            else { console.log('Recording finished. Start a new recording before collecting more.'); stop(); }
+          }
         } else await delay(100);
       } catch (error) {
         console.error(`${error.message}. Reading retained locally.`);
@@ -86,24 +93,35 @@ try {
       }
     }
   };
-  console.log(`USB -> backend -> Supabase; recording ${record}. Close Arduino Serial Monitor while this runs.`);
+  console.log(`USB -> backend -> Supabase; ${follow ? 'following guided setup' : `recording ${record}` }. Close Arduino Serial Monitor while this runs.`);
   console.log(`Recovering ${outbox.pending()} queued reading(s). Ctrl+C stops without deleting them.`);
   worker = uploadLoop();
   reader = readSerial();
   while (running) {
-    if (!pendingRequest && outbox.count(record) < 5000 && outbox.pending() < 5000) {
-      pendingRequest = { reading_id: randomUUID(), timestamp: new Date().toISOString(), started: Date.now() };
+    if (follow && !pendingRequest && !outbox.pending() && Date.now() - lastDiscovery >= 1000) {
+      lastDiscovery = Date.now();
+      try {
+        const response = await fetch(`${base}/api/v1/sensor/active-record`, {headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(10000)});
+        if (!response.ok) throw Error(`Could not find the active recording (${response.status}).`);
+        const value = await response.json();
+        const next = value.record?.record_id ?? null;
+        if (next) uuid(next, 'active record');
+        if (record !== next) { record = next; console.log(record ? `Following ${value.record.record_type} step.` : 'Waiting for a setup step…'); }
+      } catch (error) { record = null; console.error(error.message); }
+    }
+    if (record && (!follow || !outbox.pending()) && !pendingRequest && outbox.count(record) < 5000 && outbox.pending() < 5000) {
+      pendingRequest = { record_id:record, reading_id: randomUUID(), timestamp: new Date().toISOString(), started: Date.now() };
       await serial.write(`READ ${pendingRequest.reading_id}\n`);
     } else if (pendingRequest && Date.now() - pendingRequest.started > 2000) {
       console.error('No structured USB response. Upload us100_usb_upload.ino and close Serial Monitor. No distance invented.');
       pendingRequest = null;
-    } else if (!pendingRequest && outbox.count(record) >= 5000 && !outbox.pending()) {
+    } else if (record && !pendingRequest && outbox.count(record) >= 5000 && !outbox.pending()) {
       console.log('Reached 5000 points. Finish this recording and start another.'); stop();
     }
     await delay(500);
   }
   await worker;
-  console.log(`${outbox.pending()} reading(s) remain in the local outbox.`);
+  console.log(`${outbox.pending()} reading(s) remain pending; ${outbox.rejected()} late reading(s) are retained locally for ended steps.`);
 } catch (error) {
   console.error(error.message); fatal = true;
 } finally {
