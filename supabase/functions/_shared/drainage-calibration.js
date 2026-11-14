@@ -1,7 +1,7 @@
 import {ApiError,object,number,uuid,timestamp} from './validation.js';
 
 // Depth change, not volumetric flow: the same depth range is compared within a fixture.
-export const DRAIN_CALIBRATION = Object.freeze({version:1,upper:30,lower:10,fillTarget:40,runs:2,maxGapMs:5000,maxWaitMs:600000,instantMaxSeconds:6,dry:8,stable:3,maxRepeatRatio:1.3});
+export const DRAIN_CALIBRATION = Object.freeze({version:1,upper:30,lower:10,fillTarget:40,runs:2,maxGapMs:5000,freshMs:12000,maxWaitMs:600000,instantMaxSeconds:6,dry:8,stable:3,maxRepeatRatio:1.3});
 const levels=[30,25,20,15,10];
 // Alert policy frozen into each sink's profile when drainage setup completes:
 // slow = ratio x this sink's own time + its measured variation/noise; severe is the stronger ratio.
@@ -162,7 +162,7 @@ export function updateDrainageCalibration(calibrationRecord,observation,input,ca
   // (A stray echo that slips through is dropped by the capture cleaning and the check can simply be repeated.)
   const recent=sorted(observation.measurements).slice(-3),latest=recent.filter(p=>depth(p,calibrationRecord.calibration.empty_distance_mm)!==null).at(-1),newest=recent.at(-1);
   const level=latest?depth(latest,calibrationRecord.calibration.empty_distance_mm):null;
-  if(observation.recording_status!=='recording'||!latest||Date.parse(newest.timestamp)>now||now-Date.parse(newest.timestamp)>5000||level===null||level<40)issue('Wait for connected readings and enough water, safely below the rim',409,'water_not_ready');
+  if(observation.recording_status!=='recording'||!latest||Date.parse(newest.timestamp)>now||now-Date.parse(newest.timestamp)>DRAIN_CALIBRATION.freshMs||level===null||level<40)issue('Wait for connected readings and enough water, safely below the rim',409,'water_not_ready');
   const active_capture={capture_id:captureId,recording_id:observation.record_id,from_reading_id:latest.reading_id,confirmed_at:new Date(now).toISOString(),tap_off_confirmed:true,clear_drain_confirmed:true};
   return{...calibrationRecord,calibration:{...calibrationRecord.calibration,drainage:{...current,active_capture,last_issue:null}}};
  }

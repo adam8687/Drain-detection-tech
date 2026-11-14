@@ -22,7 +22,7 @@ test('live timeouts require fresh, continuous wet readings, and respect the mini
   const calibration = {empty_distance_mm: 250};
   const active = (id, length, stale = 0) => drain(id, 9, null, {recording_status:'recording', calibration,
     measurements:Array.from({length},(_,i) => ({reading_id:`${id}-${i}`, timestamp:new Date(now - stale - (length-1-i)*1000).toISOString(), sensor:{status:'ok',distance_mm:200}}))});
-  const statuses = drainStatuses([drain('a',1,10),drain('b',2,10),drain('c',3,10),active('slow',41),active('fresh',31),active('stale',61,10000)],now);
+  const statuses = drainStatuses([drain('a',1,10),drain('b',2,10),drain('c',3,10),active('slow',41),active('fresh',31),active('stale',61,20000)],now);
   assert.equal(statuses.get('slow').status, 'running_too_long');
   assert.equal(statuses.get('slow').timeout_threshold_seconds, 40);
   assert.equal(statuses.get('fresh').status, 'in_progress');

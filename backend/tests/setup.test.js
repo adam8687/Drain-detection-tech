@@ -8,7 +8,7 @@ const record=(points,calibration={empty_distance_mm: 300})=>({record_id:'setup-w
 test('water check needs empty calibration and fresh sensor evidence, not a guessed fill level',()=>{
  assert.equal(setupGuidance(record([],null),now).phase,'needs_calibration');
  assert.equal(setupGuidance(record([]),now).phase,'waiting');
- for(const p of [point('old',50,-6000),point('future',50,1000),point('failed',50,0,true)])assert.equal(setupGuidance(record([p]),now).phase,'sensor_problem');
+ for(const p of [point('old',50,-15000),point('future',50,1000),point('failed',50,0,true)])assert.equal(setupGuidance(record([p]),now).phase,'sensor_problem');
  assert.equal(setupGuidance(record([point('low',10)]),now).phase,'add_water');
  const ready=setupGuidance(record([point('ready',40)]),now);
  assert.equal(ready.phase,'water_ready');assert.match(ready.message,/Turn the tap off/);assert.equal(ready.water_depth_mm,40);
@@ -45,8 +45,19 @@ test('healthy continuous drains tolerate ordinary cadence jitter and occasional 
 
 test('connection checks expire before the longer graph stale timeout',()=>{
  const row=record([point('last',50)]);
- row.measurements[0].timestamp=new Date(Date.now()-6000).toISOString();
+ row.measurements[0].timestamp=new Date(Date.now()-13000).toISOString();
  const view=computedView(row);
  assert.equal(view.sensor_connection,'stale');
  assert.equal(view.setup_guidance.phase,'sensor_problem');
+});
+
+test('a reading up to 12 s old still counts as connected, because the board uploads every ~5 s', () => {
+ for (const age of [1, 6, 9, 11]) {
+  const row = record([point('last', 50)]);
+  row.measurements[0].timestamp = new Date(Date.now() - age * 1000).toISOString();
+  assert.equal(computedView(row).sensor_connection, 'connected', `${age} s old`);
+ }
+ const row = record([point('last', 50)]);
+ row.measurements[0].timestamp = new Date(Date.now() - 13000).toISOString();
+ assert.equal(computedView(row).sensor_connection, 'stale', 'but not forever');
 });

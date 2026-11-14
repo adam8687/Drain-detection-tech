@@ -20,7 +20,7 @@ test('drainage calibration extends the existing empty reference, uses matched de
 test('calibration requires clear-drain/tap-off confirmations, same fixture/source/reference and fresh valid wet evidence',()=>{
  const cal=calibration(),source=monitoring();assert.throws(()=>validateDrainageAction({action:'start',recording_id:source.record_id}),/Confirm/);
  for(const changed of [{...source,fixture_id:'other'},{...source,data_source:'simulation'},{...source,calibration:{empty_distance_mm:310}},{...source,record_type:'drainage'},{...source,measurements:[point(time,10)]},{...source,recording_status:'finished'},{...source,measurements:[{...point(time),sensor:{distance_mm:null,status:'timeout'}}]}])assert.throws(()=>run(cal,changed));
- assert.throws(()=>run(cal,monitoring(time-10000),time));assert.throws(()=>run({...cal,schema_version:1},source));assert.throws(()=>calibrationSnapshot({empty_distance_mm:300,drainage:{...emptyDrainageCalibration(),status:'ready'}}));
+ assert.throws(()=>run(cal,monitoring(time-20000),time));assert.throws(()=>run({...cal,schema_version:1},source));assert.throws(()=>calibrationSnapshot({empty_distance_mm:300,drainage:{...emptyDrainageCalibration(),status:'ready'}}));
  assert.throws(()=>validateDrainageAction({action:'complete',capture_id:randomUUID(),baseline_duration_seconds:1}));
 });
 test('interrupted, refilled, unresolved and inconsistent trials cannot silently establish a baseline',()=>{

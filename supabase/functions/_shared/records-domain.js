@@ -2,7 +2,7 @@ import {validateDrainageCalibration,drainageProfileOf,judgeDrainage} from './dra
 import { isDeepStrictEqual } from 'node:util';
 import { ApiError, object, number, uuid, timestamp, deviceId } from './validation.js';
 
-export const SETTINGS = Object.freeze({ wet: 20, dry: 8, stable: 3, maxGap: 5000, maxMeasurements: 5000 });
+export const SETTINGS = Object.freeze({ wet: 20, dry: 8, stable: 3, maxGap: 5000, fresh: 12000, maxMeasurements: 5000 });
 export const fail = (message, status = 422, code = 'validation_error') => { throw new ApiError(status, code, message); };
 export function calibrationSnapshot(value) {
   if (value === null) return null;
@@ -278,7 +278,7 @@ export function drainStatuses(rows, now = Date.now()) {
           const points = ordered(row.measurements), latest = points.at(-1), values = depths(latest, row.calibration);
           seconds = Math.max(0, (Date.parse(latest.timestamp) - Date.parse(start.timestamp)) / 1000);
           const gaps = points.filter(p => p.timestamp >= start.timestamp);
-          const reliable = now - Date.parse(latest.timestamp) <= SETTINGS.maxGap && now >= Date.parse(latest.timestamp)
+          const reliable = now - Date.parse(latest.timestamp) <= SETTINGS.fresh && now >= Date.parse(latest.timestamp)
             && gaps.every((p,i) => depths(p,row.calibration) && (!i || Date.parse(p.timestamp) - Date.parse(gaps[i-1].timestamp) <= SETTINGS.maxGap));
           if (!reliable) { status = 'unknown'; message = 'Fresh, continuous readings from the sensor are required. Check the device.'; }
           else if (values.some(d => d > SETTINGS.dry) && seconds >= timeout) { status = 'running_too_long'; message = `Water remains after ${seconds.toFixed(1)} seconds (limit ${timeout.toFixed(1)} seconds). Check for a blockage or continuing water input.`; }
@@ -349,7 +349,7 @@ export function setupGuidance(record, now = Date.now()) {
   const reply = (phase, message, water_depth_mm = null) => ({phase, message, water_depth_mm, target_depth_mm:target});
   if (!record.calibration) return reply('needs_calibration','Record the empty basin first.');
   if (!latest) return reply('waiting','Waiting for the device. Keep the tap off until readings arrive.');
-  if (now - Date.parse(latest.timestamp) > SETTINGS.maxGap || Date.parse(latest.timestamp) > now) return reply('sensor_problem','Readings have paused. Turn the tap off and reconnect the device.');
+  if (now - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > now) return reply('sensor_problem','Readings have paused. Turn the tap off and reconnect the device.');
   const values = depths(latest,record.calibration);
   if (!values) return reply('sensor_problem','The sensor needs a clear reading. Turn the tap off and check its position.');
   const level = Math.max(...values);
@@ -372,7 +372,7 @@ export function computedView(record, sample = null) {
   if (stale && sample === null && timeline.length) timeline.at(-1).seconds_remaining = null;
   const learning = record.record_type === 'calibration' ? learnCalibration(visible) : null;
   const latest = visible.at(-1);
-  const sensor_connection = !latest ? 'waiting' : latest.sensor.status !== 'ok' ? 'problem' : record.recording_status === 'recording' && (Date.now() - Date.parse(latest.timestamp) > SETTINGS.maxGap || Date.parse(latest.timestamp) > Date.now()) ? 'stale' : 'connected';
+  const sensor_connection = !latest ? 'waiting' : latest.sensor.status !== 'ok' ? 'problem' : record.recording_status === 'recording' && (Date.now() - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > Date.now()) ? 'stale' : 'connected';
   return { drain_cycles: drainCycleSummaries(record), monitoring_limits: { slow_seconds: STATUS_SETTINGS.initialSlowSeconds, standing_water_seconds: STATUS_SETTINGS.initialTimeoutSeconds }, sensor_connection, setup_guidance: setupGuidance({...record, measurements:visible}), forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, first_measurement_at: first ?? null, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
 }
 // Applies points in order inside one atomic update. Points arriving after the
