@@ -96,36 +96,51 @@ settings. A local frontend is needed only to view a local website, never for ESP
 collection. The live migration test stops the local port-8000 backend before
 verifying the board's cloud upload.
 
-## Calibration and further recordings
+## Onboard a unit and test it on hardware
 
-Stop after the latest Saved acknowledgement and finish monitoring. Both real
-sensors must work. Set SECOND_SENSOR_ENABLED=true in device/wifi/.env, and match
-USE_UART to the physical jumpers.
+One US-100 per unit. The app records the empty sink, then two tap-off drains, and saves that
+unit's own alert thresholds (a drainage profile). Apply every migration in `supabase/migrations`
+and run `npm run cloud:deploy` first; without the migrations a finished profile is rejected by the
+database.
 
-```bash
-npm run wifi:prepare -- friend-sink calibration --confirm-empty
-# Upload; wait for stable empty-baseline completion.
-npm run wifi:prepare -- friend-sink drainage
-# Upload; start with water present, tap off, then release drain.
-```
+Check before powering up: with `USE_UART=true` in `device/wifi/.env` the US-100 rear jumper must be
+installed (9600 baud, Trig/TX on D1, Echo/RX on D0, 3V3 and GND); with `false` it must be removed.
+Mount the sensor fixed, pointing down, clear of faucet spray and above the highest water level. The
+US-100 is not waterproof. Fill only to the app's indicator (at least 40 mm, safely below the rim).
 
-Commands now contact Supabase, not localhost:8000. Successful empty calibration
-is reused. Drainage setup (two tap-off runs on a drain you confirm is clear) saves a
-per-sink profile that now sets the slow-drain status, alert and email limits. Sinks
-without a profile keep the earlier learn-from-first-three-drains rules.
+1. **Create the unit in the app first.** `npm run cloud:start`, sign in, Add unit with the ID printed
+   on the sensor. Units created from the command line have no owner and cannot be claimed in the app
+   (the app then says the unit is registered to another account).
+2. **Provision the board.** `npm run cloud:configure -- DR-4851` uses the unit you just created, issues the
+   sensor key, creates the monitoring recording and writes the ignored `secrets.h`. For a unit set up by an
+   installer first, link it to the customer at the same time:
+   `npm run cloud:configure -- DR-4851 --owner-email customer@example.com` (the customer must have signed
+   up). If the saved recording in `device/wifi/data/state.json` no longer exists, for example after a
+   migration, it creates a new one instead of failing.
+3. **Flash.** Arduino IDE, **Arduino Nano ESP32**, **With FAT partition (default)**, Upload, Serial Monitor
+   115200. Wait for "Saved measurement in Supabase". If it stops with "Pending point belongs to another
+   destination or is damaged" or "Upload stopped (HTTP 4xx)" the board holds a reading from older firmware:
+   set `INITIALIZE_EMPTY_FILESYSTEM=true`, rerun step 2, upload once, then set it back to `false` and rerun
+   step 2. Only do this when nothing pending is still needed.
+4. **Verify transport.** `npm run wifi:watch` waits for a new real reading and compares the API, Supabase and
+   website.
+5. **Check the sensor.** With the sink empty, readings should stay within about 3 mm with under 2%
+   timeouts. Compare one reading with a ruler.
+6. **Onboard in the app.** Open `/add-unit?fixture=DR-4851`: connect, record the empty sink (8 to 10 stable
+   seconds), then two tap-off drains (plug in, fill to the indicator, tap off, release when asked). The
+   result shows the measured time, or "Very fast drain" when the sink empties between readings. The
+   thresholds are the 1.5x and 3x ratios of that unit's own time plus its variation, never below the
+   6 s and 15 s floors.
+7. **Try real alerts.** Normal drains read normal. A partly blocked drain at about twice the time warns
+   (repeated slowdowns warn again); a heavy blockage or standing water reports Severe or Running too long;
+   leaving shallow water under the sensor for 30 s reports "Re-check empty level"; covering or unplugging
+   the sensor reports "Check readings".
 
-Before testing on hardware: apply `migrations/202611130001_drainage_profile.sql`
-(`supabase db push` or the SQL editor), then `npm run cloud:deploy` so the hosted
-function includes the profile logic. Without the migration, saving a completed
-profile is rejected by the database.
-
-Limits remain unchanged: two working sensor locations for calibration/drainage,
-5000 points per record, one pending board point with acquisition paused offline,
-and manual record provisioning after reboot/completion. Successful timeout uploads
-prove transport, not valid distances/calibration. Per-sample flash writes are for
-bench tests; sustained deployment needs endurance planning. TLS verification stays
-enabled. Reconfigure its CA if the service trust chain changes. Local Node SSE
-remains available; cloud uses the frontend's existing REST polling workflow.
+Limits: 5000 points per recording, one pending board point with acquisition paused offline, and manual
+record provisioning after a reboot or completion. Successful timeout uploads prove transport, not valid
+distances. Per-sample flash writes are for bench tests; sustained deployment needs endurance planning. TLS
+verification stays enabled. Reconfigure its CA if the service trust chain changes. Local Node SSE remains
+available; cloud uses the frontend's REST polling.
 
 ## Checks
 

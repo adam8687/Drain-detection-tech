@@ -23,11 +23,10 @@ All commands run from the repository root.
 | Serial Monitor | **115200 baud** |
 | US-100 UART, if selected | **9600 baud**, rear jumper installed |
 | Sensor A | Trig/TX **D1**, Echo/RX **D0** |
-| Optional sensor B | Trig/TX **D3**, Echo/RX **D2** |
 
-The sensor use 3V3/GND. Disconnect power while wiring. Default is one sensor in
-trigger/echo mode, rear jumper **removed**. Missing B uploads null/timeout.
-Calibration/drainage need two working sensors. The ESP never uses localhost or
+The sensor uses 3V3/GND. Disconnect power while wiring. Default is trigger/echo
+mode, rear jumper **removed**. Each unit uses one sensor; calibration and drainage need
+only that one. Sensor B pins are legacy and unused. The ESP never uses localhost or
 the website port. The launcher refuses occupied ports instead of switching them.
 Do not run another backend/frontend or device:upload alongside wifi:start.
 Your Mac must stay awake with Internet access for this local setup.

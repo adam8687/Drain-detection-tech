@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { configFromEnv } from '../backend/src/config.js';
 import { SupabaseAccessStore } from '../supabase/functions/_shared/access-storage.js';
 import { hashDeviceKey } from '../backend/src/auth.js';
-import { api, settings, firmwareHeader, prepareRecord, checkTables } from '../device/wifi/testing.js';
+import { api, settings, firmwareHeader, prepareRecord, checkTables, findPreviousRecording, findAuthUser, grantOwner } from '../device/wifi/testing.js';
 import { selectTrustedRoot } from './cloud-tls.js';
 
 const root = new URL('../', import.meta.url), command = process.argv[2];
@@ -81,15 +81,23 @@ try {
       if(!wifiSource) throw Error('Run wifi:init and fill device/wifi/.env first.');
       const wifi=parseEnv(wifiSource);
       const state=JSON.parse(await text('device/wifi/data/state.json')||'{"fixtures":{}}');
-      const fixture=process.argv[3]||state.fixtures[state.current]?.fixture||'friend-sink';
+      // Usage: cloud:configure [unit-id] [--owner-email name@example.com]
+      const args=process.argv.slice(3),ownerAt=args.indexOf('--owner-email'),ownerEmail=ownerAt>=0?args[ownerAt+1]:null;
+      if(ownerAt>=0&&(!ownerEmail||ownerEmail.startsWith('--'))) throw Error('Give the customer account e-mail after --owner-email.');
+      const fixture=args.find((a,i)=>!a.startsWith('--')&&i!==ownerAt+1)||state.fixtures[state.current]?.fixture||'friend-sink';
       const oldSlot=Object.keys(state.fixtures).findLast(key=>state.fixtures[key].fixture===fixture && state.fixtures[key].recordId);
-      const old=oldSlot ? state.fixtures[oldSlot]:null;
+      let old=oldSlot ? state.fixtures[oldSlot]:null,oldRemote=null;
+      if(old) {
+        // The saved recording may have been archived or removed (for example by a database migration). Start a new one.
+        oldRemote=await findPreviousRecording(api,base,secrets.DRAIN_ADMIN_TOKEN,old.recordId);
+        if(!oldRemote) {console.log('The saved recording no longer exists in Supabase (archived or removed). Creating a new monitoring recording.');old=null;}
+      }
       const rootCa=await rootCertificate(new URL(config.supabaseUrl).hostname);
       await privateFile('device/wifi/data/supabase-root-ca.pem',rootCa);
       const cloudConfig=settings(process.env,{...wifi,CLOUD_API_URL:base});cloudConfig.rootCa=rootCa;
       let record,key;
       if(old) {
-        const remote=await api(base,secrets.DRAIN_ADMIN_TOKEN,`/records/${old.recordId}`);
+        const remote={record:oldRemote};
         if(remote.record.fixture_id!==fixture || remote.record.data_source!=='sensor' || remote.record.recording_status!=='recording') throw Error('The existing record cannot be migrated safely. Review/finish it before creating a new cloud recording.');
         const accessStore=new SupabaseAccessStore(config.supabaseUrl,config.supabaseKey);
         const registered=await accessStore.get('device_keys',hashDeviceKey(old.key));
@@ -101,6 +109,13 @@ try {
         const result=await prepareRecord({config:cloudConfig,token:secrets.DRAIN_ADMIN_TOKEN,fixture,type:'monitoring',previous:{saveKey:async saved=>{
           state.fixtures[`${base}|${fixture}`]={fixture,key:saved};await privateFile('device/wifi/data/state.json',JSON.stringify(state,null,2)+'\n');
         }}});record=result.record;key=result.key;
+      }
+      if(ownerEmail) {
+        // Link this installer-provisioned unit to the customer's account so they can manage it in the app.
+        const user=await findAuthUser(ownerEmail,{supabaseUrl:config.supabaseUrl,key:config.supabaseKey});
+        if(!user) throw Error('No account uses that e-mail yet. Ask the customer to sign up first, then run this again.');
+        const accessStore=new SupabaseAccessStore(config.supabaseUrl,config.supabaseKey);
+        console.log(await grantOwner(accessStore,fixture,user.id)?`Linked ${fixture} to ${ownerEmail} as owner.`:`${ownerEmail} already owns ${fixture}.`);
       }
       // Preserve existing Wi-Fi password and sensor mode while changing only routing.
       let updated=wifiSource;
