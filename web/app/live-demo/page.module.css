@@ -218,3 +218,12 @@
 @media(max-width:640px) { .testBody { grid-template-columns:100px minmax(0,1fr); } .testBody > .waterChart,.testBody > .emptyWater { grid-column:1/-1; } .duration strong { font-size:64px; } }
 
 @media(max-width:640px) { .emptyWater { min-height:100px; } .emptyChart { min-height:120px; } .tube figcaption { font-size:10px; } }
+
+.primary:hover:not(:disabled) { background:var(--color-primary-hover); }
+.secondary:hover:not(:disabled),.deviceCard:hover:not([aria-pressed="true"]),.range button:hover:not([aria-pressed="true"]) { background:var(--color-surface-muted); }
+.bar { transition:height var(--motion-data) var(--ease-out),background-color var(--motion-press) var(--ease-out); }
+.duration strong,.barValue,.axisY,.axisX,.timeTicks { font-variant-numeric:tabular-nums; }
+.searchResults { animation:dropdown var(--motion-state) var(--ease-out); }
+.loading:not(:empty) { animation:pulse 1.5s ease-in-out infinite alternate; }
+@keyframes dropdown { from { opacity:0; transform:translateY(-4px); } }
+@keyframes pulse { to { opacity:.6; } }

@@ -32,7 +32,7 @@
 .barRow { display: grid; grid-template-columns: 58px 1fr 88px 130px; align-items: center; gap: 12px; font-size: 13px; }
 .barRow strong { text-align: right; font-weight: 500; }
 .barTrack { height: 20px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 4px; }
-.barTrack > div { height: 100%; border-radius: 4px; background: #2563eb; }
+.barTrack > div { height: 100%; border-radius: 4px; background: #2563eb; transition: width var(--motion-data) var(--ease-out); }
 .note { margin-top: 16px; }
 .guide { margin-top: 32px; line-height: 1.7; }
 .guide h2 { margin-bottom: 16px; font-size: 22px; }
