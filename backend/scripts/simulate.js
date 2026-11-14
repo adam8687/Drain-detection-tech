@@ -21,7 +21,7 @@ try {
     await delay(Math.max(0, Date.parse(point.timestamp) - Date.now()));
     let saved;
     for (let attempt = 0; attempt < 3; attempt++) { try { saved = await api(`/records/${record.record_id}/measurements`, point); break; } catch (error) { if (attempt === 2) throw error; await delay(250 * (attempt + 1)); } }
-    console.log(`${point.timestamp}: A ${point.sensor_a.distance_mm ?? point.sensor_a.status}, B ${point.sensor_b.distance_mm ?? point.sensor_b.status}`);
+    console.log(`${point.timestamp}: Sensor ${point.sensor.distance_mm ?? point.sensor.status}`);
     if (saved.recording_status === 'finished') { console.log(JSON.stringify(saved.result || saved.calibration)); process.exitCode = 0; break; }
   }
   const finished = await api(`/records/${record.record_id}/finish`, {});

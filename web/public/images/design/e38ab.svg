@@ -1,0 +1,25 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="1583.55" height="89.2228" viewBox="0 0 1583.55 89.2228" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Ocean wave bottom" filter="url(#filter0_dd_0_19)">
+<path d="M120.898 84.097C-102.435 77.4304 72.5647 54.4304 120.898 44.097C169.231 33.7637 302.565 21.097 410.898 22.097C519.231 23.097 650.898 50.4304 770.898 50.097C890.898 49.7637 1015.9 21.4304 1130.9 20.097C1245.9 18.7637 1405.9 31.4304 1460.9 42.097C1515.9 52.7637 1684.23 77.097 1460.9 84.097C1237.56 91.097 344.231 90.7637 120.898 84.097Z" fill="url(#paint0_linear_0_19)"/>
+</g>
+<defs>
+<filter id="filter0_dd_0_19" x="3.21476e-07" y="-7.50816e-09" width="1583.55" height="89.2228" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="-3"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.16 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_19"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feMorphology radius="4" operator="erode" in="SourceAlpha" result="effect2_dropShadow_0_19"/>
+<feOffset dy="-10"/>
+<feGaussianBlur stdDeviation="7"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.12 0"/>
+<feBlend mode="normal" in2="effect1_dropShadow_0_19" result="effect2_dropShadow_0_19"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect2_dropShadow_0_19" result="shape"/>
+</filter>
+<linearGradient id="paint0_linear_0_19" x1="791.773" y1="20" x2="791.773" y2="89.2228" gradientUnits="userSpaceOnUse">
+<stop stop-color="#4B8FD0"/>
+<stop offset="1" stop-color="#2563AE"/>
+</linearGradient>
+</defs>
+</svg>

@@ -12,7 +12,7 @@ import { GET, POST } from '../../web/app/api/backend/[...path]/route.ts';
 import { DrainApi } from '../../web/lib/api.ts';
 
 const config = { ...configFromEnv({ STORAGE_BACKEND: 'sqlite', SQLITE_PATH: ':memory:' }), apiKey: 'test-token' };
-const point = (time, distance = 300) => ({ reading_id: randomUUID(), timestamp: new Date(time).toISOString(), sensor_a: { distance_mm: distance, status: 'ok' }, sensor_b: { distance_mm: distance + 20, status: 'ok' } });
+const point = (time, distance = 300) => ({ reading_id: randomUUID(), timestamp: new Date(time).toISOString(), sensor: { distance_mm: distance, status: 'ok' } });
 const calibration = SIMULATION_CALIBRATION;
 const record = overrides => ({ record_id: randomUUID(), fixture_id: 'sink-one', record_type: 'drainage', data_source: 'simulation', recording_status: 'recording', calibration, measurements: [], result: null, created_at: new Date().toISOString(), ...overrides });
 async function fixture(t) {
@@ -29,15 +29,21 @@ async function calibrate(api, fixture_id = 'sink-one', data_source = 'simulation
 
 test('measurement validation enforces units, failure nulls, UUIDs and synchronized timestamps', () => {
   const valid = point(Date.now()); assert.deepEqual(validateMeasurement(valid), valid);
-  for (const mutate of [p => { p.sensor_a.distance_mm = 0; }, p => { p.sensor_b = { status: 'timeout', distance_mm: 0 }; }, p => { p.timestamp = '2026-01-01'; }, p => { p.timestamp = new Date(Date.now() + 600000).toISOString(); }, p => { p.reading_id = 'not-an-id'; }, p => { p.temperature_c = 20; }]) { const p = structuredClone(valid); mutate(p); assert.throws(() => validateMeasurement(p)); }
+  for (const mutate of [p => { p.sensor.distance_mm = 0; }, p => { p.sensor = { status: 'timeout', distance_mm: 0 }; }, p => { p.timestamp = '2026-01-01'; }, p => { p.timestamp = new Date(Date.now() + 600000).toISOString(); }, p => { p.reading_id = 'not-an-id'; }, p => { p.temperature_c = 20; }]) { const p = structuredClone(valid); mutate(p); assert.throws(() => validateMeasurement(p)); }
 });
-test('calibration requires stable paired samples across eight seconds, rejects noise and echoes', () => {
+test('calibration requires stable sensor samples across eight seconds, rejects noise and echoes', () => {
   const samples = simulateMeasurements({ scenario: 'empty', start: Date.now() - 60000 });
   assert.ok(learnCalibration(samples).calibration);
   assert.equal(learnCalibration(samples.slice(0, 10)).calibration, null);
-  const noisy = samples.slice(-20).map(p => structuredClone(p)); noisy[5].sensor_a.distance_mm += 20;
-  assert.equal(learnCalibration(noisy).calibration, null);
-  const failed = structuredClone(samples.slice(-20)); failed[10].sensor_b = { status: 'timeout', distance_mm: null };
+  // One stray echo no longer blocks setup (the median is unaffected); frequent echoes or a drifting mount still do.
+  const base = samples.slice(-20).map(p => structuredClone(p)), reference = learnCalibration(base).calibration;
+  const one = structuredClone(base); one[5].sensor.distance_mm += 20;
+  assert.deepEqual(learnCalibration(one).calibration, reference);
+  const echoes = structuredClone(base); for (const i of [2, 7, 12]) echoes[i].sensor.distance_mm += 400;
+  assert.equal(learnCalibration(echoes).calibration, null);
+  const drifting = structuredClone(base); drifting.forEach((p, i) => { p.sensor.distance_mm += i * 2; });
+  assert.equal(learnCalibration(drifting).calibration, null);
+  const failed = structuredClone(samples.slice(-20)); failed[10].sensor = { status: 'timeout', distance_mm: null };
   assert.equal(learnCalibration(failed).calibration, null);
 });
 test('backend drainage uses elapsed timestamps, handles pooling, missing echoes and sampling gaps', () => {
@@ -53,27 +59,27 @@ test('server forecasts refuse stale, invalid and rising values; replay never use
   assert.equal(forecast(points, calibration).state, 'forecast');
   assert.equal(forecast(points, calibration, true).state, 'unavailable');
   assert.equal(forecast(points, null).state, 'unavailable');
-  const invalid = structuredClone(points); invalid.at(-1).sensor_a = { status: 'timeout', distance_mm: null };
+  const invalid = structuredClone(points); invalid.at(-1).sensor = { status: 'timeout', distance_mm: null };
   assert.equal(forecast(invalid, calibration).state, 'unavailable');
-  const rising = points.map((p, i) => ({ ...p, sensor_a: { status: 'ok', distance_mm: 350 - i } }));
+  const rising = points.map((p, i) => ({ ...p, sensor: { status: 'ok', distance_mm: 350 - i } }));
   assert.equal(forecast(rising, calibration).state, 'unavailable');
   const full = computedView(record({ measurements: points, recording_status: 'finished' }), 8);
   const prefix = computedView(record({ measurements: points.slice(0, 9), recording_status: 'finished' }));
   assert.deepEqual(full.timeline, prefix.timeline);
 });
-test('water-level timeline uses calibrated paired readings, actual timestamps and replay boundaries', () => {
+test('water-level timeline uses calibrated sensor readings, actual timestamps and replay boundaries', () => {
   const start = Date.now() - 60000;
   const samples = [point(start, 300), point(start + 1500, 320), point(start + 9000, 350)];
-  samples[2].sensor_b = { status: 'timeout', distance_mm: null };
+  samples[2].sensor = { status: 'timeout', distance_mm: null };
   const stored = record({ measurements: [...samples].reverse(), recording_status: 'finished' });
   const levels = computedView(stored).water_levels;
   assert.deepEqual(levels, [
-    { elapsed_seconds: 0, sensor_a_mm: calibration.sensor_a_empty_mm - 300, sensor_b_mm: calibration.sensor_b_empty_mm - 320, gap_before: false },
-    { elapsed_seconds: 1.5, sensor_a_mm: calibration.sensor_a_empty_mm - 320, sensor_b_mm: calibration.sensor_b_empty_mm - 340, gap_before: false },
-    { elapsed_seconds: 9, sensor_a_mm: null, sensor_b_mm: null, gap_before: true },
+    { elapsed_seconds: 0, depth_mm: calibration.empty_distance_mm - 300, gap_before: false },
+    { elapsed_seconds: 1.5, depth_mm: calibration.empty_distance_mm - 320, gap_before: false },
+    { elapsed_seconds: 9, depth_mm: null, gap_before: true },
   ]);
   assert.deepEqual(computedView(stored, 1).water_levels, levels.slice(0, 2));
-  assert.ok(computedView({ ...stored, calibration: null }).water_levels.every(p => p.sensor_a_mm === null && p.sensor_b_mm === null));
+  assert.ok(computedView({ ...stored, calibration: null }).water_levels.every(p => p.depth_mm === null));
   assert.deepEqual(computedView(record({ measurements: [] })).water_levels, []);
 });
 test('single-table storage enforces one active recording and preserves unrelated sources', async t => {
@@ -82,7 +88,7 @@ test('single-table storage enforces one active recording and preserves unrelated
   await assert.rejects(() => store.insert(record({})), e => e.status === 409);
   await store.insert(record({ data_source: 'sensor' }));
   assert.equal((await store.list({ fixture_id: 'sink-one' })).length, 2);
-  assert.deepEqual(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name), ['drain_records']);
+  assert.deepEqual(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name), ['drain_records','drain_email_references','drain_email_preferences','drain_email_outbox']);
 });
 test('API requires empty confirmation and isolates calibration by fixture and data source', async t => {
   const { api } = await fixture(t);
@@ -102,7 +108,7 @@ test('concurrent uploads and identical retries never overwrite measurements; cha
   const next = Array.from({ length: 8 }, (_, i) => point(Date.now() - 15000 + i * 500));
   assert.ok((await Promise.all(next.map(p => api(`/records/${id}/measurements`, 'POST', p)))).every(r => r.status === 201));
   assert.equal((await api(`/records/${id}`)).data.record.measurements.length, 9);
-  assert.equal((await api(`/records/${id}/measurements`, 'POST', { ...p, sensor_a: { status: 'ok', distance_mm: 399 } })).status, 409);
+  assert.equal((await api(`/records/${id}/measurements`, 'POST', { ...p, sensor: { status: 'ok', distance_mm: 399 } })).status, 409);
 });
 test('backend auto-finishes drainage and freezes results while allowing identical retry acknowledgements', async t => {
   const { api, app } = await fixture(t); await calibrate(api);
@@ -136,8 +142,8 @@ test('seed data is repeatable, sensor-like, source labeled, and results are comp
   assert.ok(rows.every(r => r.data_source === 'simulation'));
   const drainage = rows.filter(r => r.record_type === 'drainage');
   assert.ok(drainage.some(r => r.result.outcome === 'uncertain'));
-  assert.ok(drainage.some(r => r.measurements.some(p => p.sensor_a.status !== 'ok' || p.sensor_b.status !== 'ok')));
-  assert.ok(drainage.every(r => r.measurements.every(p => ['sensor_a','sensor_b'].every(s => p[s].distance_mm === null || Number.isInteger(p[s].distance_mm)))));
+  assert.ok(drainage.some(r => r.measurements.some(p => p.sensor.status !== 'ok' || p.sensor.status !== 'ok')));
+  assert.ok(drainage.every(r => r.measurements.every(p => ['sensor'].every(s => p[s].distance_mm === null || Number.isInteger(p[s].distance_mm)))));
 });
 test('legacy migration preserves measurements, baseline snapshots and completed duration, without overwrites', async t => {
   const store = new SQLiteRecordStore(':memory:'); t.after(() => store.close());
@@ -185,8 +191,16 @@ test('production configuration requires Supabase, strong API authentication and 
 test('long stretches of failed echoes cannot produce a precise completed duration', () => {
   const start = Date.now() - 60000;
   const points = [point(start)];
-  for (let i = 1; i <= 15; i++) points.push({ ...point(start + i * 1000), sensor_b: { distance_mm: null, status: 'timeout' } });
+  for (let i = 1; i <= 15; i++) points.push({ ...point(start + i * 1000),sensor:{distance_mm:null,status:'timeout'} });
   for (let i = 16; i <= 18; i++) points.push(point(start + i * 1000, 400));
   const result = analyzeDrainage(points, calibration).result;
   assert.equal(result.outcome, 'uncertain'); assert.equal(result.drainage_time_seconds, null);
+});
+
+test('Node accepts the same batched one-sensor uploads as the hosted API',async t=>{
+ const {api}=await fixture(t);
+ const created=await api('/records','POST',{fixture_id:'single-batch',data_source:'simulation',record_type:'monitoring'});
+ const measurements=Array.from({length:4},(_,i)=>point(Date.now()-10000+i*500));
+ const first=await api(`/records/${created.data.record_id}/measurements`,'POST',{measurements});assert.equal(first.status,201);assert.equal(first.data.measurement_count,4);
+ const retry=await api(`/records/${created.data.record_id}/measurements`,'POST',{measurements});assert.equal(retry.status,200);assert.equal(retry.data.duplicate,true);
 });

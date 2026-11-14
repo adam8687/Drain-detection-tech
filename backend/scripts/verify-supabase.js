@@ -5,7 +5,8 @@ import { createApp } from '../src/server.js';
 import { simulateMeasurements } from '../src/simulation.js';
 let app;
 try {
-  const config = configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' });
+  const current=configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' });
+  const config={...current,apiKey:current.apiKey||randomUUID()};
   app = createApp(config); await app.store.ready();
   await new Promise((resolve, reject) => { app.server.once('error', reject); app.server.listen(0, '127.0.0.1', resolve); });
   const fixture = `verify-${randomUUID().slice(0,8)}`, base = `http://127.0.0.1:${app.server.address().port}/api/v1`;

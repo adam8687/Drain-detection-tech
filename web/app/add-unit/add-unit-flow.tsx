@@ -1,43 +1,38 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { CSSProperties, FormEvent } from 'react';
 import AccountPanel from '../../components/account-panel';
-import MobileMenu from '../../components/mobile-menu';
+import ProductHeader from '../../components/product-header';
+import DesignAsset from '../../components/design-asset';
+import OceanWaves from '../../components/ocean-waves';
 import { DrainApi, DrainApiError } from '../../lib/api';
-import type { RecordView } from '../../lib/api';
+import type { Calibration, RecordView } from '../../lib/api';
 import { supabase, useSession } from '../../lib/supabase';
 import { useRecording } from './use-recording';
+import DrainageSetup from './drainage-setup';
 import shell from '../live-demo/page.module.css';
 import styles from './page.module.css';
 
-type Step = 'add' | 'connect' | 'teach' | 'done';
-type Method = 'wifi' | 'network';
-interface Drain { record_id: string; seconds: number | null }
+type Step = 'add' | 'connect' | 'teach' | 'drain' | 'done';
+type Method = 'usb' | 'wifi';
 
-const BASELINE_DRAINS = 3;
-const STEPS: { id: Exclude<Step, 'done'>; label: string }[] = [{ id: 'add', label: 'Add unit' }, { id: 'connect', label: 'Connect' }, { id: 'teach', label: 'Teach baseline' }];
+const STEPS: { id: Exclude<Step, 'done'>; label: string }[] = [{ id: 'add', label: 'Add unit' }, { id: 'connect', label: 'Connect' }, { id: 'teach', label: 'Calibrate' }];
 const UNIT_PATTERN = '[a-zA-Z0-9_\\-]{1,64}';
 
 const message = (err: unknown, fallback: string) => err instanceof Error ? err.message : fallback;
 const reading = (view: RecordView | null) => {
   const latest = view?.record.measurements.at(-1);
   if (!latest) return null;
-  const show = (s: typeof latest.sensor_a) => s.status === 'ok' ? `${s.distance_mm} mm` : s.status.replace('_', ' ');
-  return `Sensor A ${show(latest.sensor_a)} · Sensor B ${show(latest.sensor_b)}`;
+  const show = (s: typeof latest.sensor) => s.status === 'ok' ? `${s.distance_mm} mm` : s.status.replace('_', ' ');
+  return `Sensor: ${show(latest.sensor)}`;
 };
 
-const PhoneIcon = () => <svg className={styles.methodIcon} viewBox="0 0 64 48" aria-hidden="true">
-  <rect x="6" y="2" width="22" height="42" rx="4" /><line x1="13" y1="38" x2="21" y2="38" />
-  <path d="M36 16a10 10 0 0 1 0 16M42 11a17 17 0 0 1 0 26M48 6a24 24 0 0 1 0 36" />
-</svg>;
-const ServerIcon = () => <svg className={styles.methodIcon} viewBox="0 0 64 48" aria-hidden="true">
-  <rect x="4" y="4" width="40" height="16" rx="4" /><rect x="4" y="28" width="40" height="16" rx="4" />
-  <circle cx="12" cy="12" r="2" /><circle cx="12" cy="36" r="2" /><line x1="20" y1="12" x2="36" y2="12" /><line x1="20" y1="36" x2="36" y2="36" />
-</svg>;
+const PhoneIcon = () => <DesignAsset file="30eac.svg" className={styles.methodIcon} />;
+const ServerIcon = () => <DesignAsset file="d1297.svg" className={styles.methodIcon} />;
 
 function Stepper({ step }: { step: Step }) {
-  const current = step === 'done' ? STEPS.length : STEPS.findIndex(s => s.id === step);
+  const current = step === 'done' ? STEPS.length : STEPS.findIndex(s => s.id === (step==='drain'?'teach':step));
   return <ol className={styles.stepper} aria-label="Setup progress">
     {STEPS.map((s, i) => <li key={s.id} className={i <= current ? styles.reached : ''} aria-current={i === current ? 'step' : undefined}>
       <span>{i + 1} {s.label}</span><i />
@@ -45,253 +40,98 @@ function Stepper({ step }: { step: Step }) {
   </ol>;
 }
 
-function DeviceConfig({ unit, recordId, sensorKey }: { unit: string; recordId: string; sensorKey: string | null }) {
-  const [copied, setCopied] = useState(false);
-  const text = [
-    'API_BASE_URL=http://127.0.0.1:8000',
-    `SENSOR_FIXTURE_ID=${unit}`,
-    `SENSOR_RECORD_ID=${recordId}`,
-    `SENSOR_KEY=${sensorKey ?? '<the sensor key you saved in step 2>'}`,
-  ].join('\n');
-  return <details className={styles.config}>
-    <summary>Device settings for this recording</summary>
-    <p>Put these in <code>device/usb-bridge/.env</code> on the computer the unit is plugged into, then restart <code>npm run device:upload</code>. Change <code>API_BASE_URL</code> if the backend runs on another machine.</p>
-    <pre>{text}</pre>
-    <button type="button" className={shell.secondary} onClick={() => void navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })}>{copied ? 'Copied' : 'Copy settings'}</button>
-  </details>;
-}
-
 export default function AddUnitFlow() {
   const session = useSession();
-  const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
-  const [needsToken, setNeedsToken] = useState(false);
-  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || token), [session?.access_token, token]);
-
-  const [step, setStep] = useState<Step>('add');
-  const [unit, setUnit] = useState(''); const [location, setLocation] = useState('');
-  const [method, setMethod] = useState<Method>('wifi');
-  const [existing, setExisting] = useState(false);
-  const [sensorKey, setSensorKey] = useState<string | null>(null);
-  const [keyCopied, setKeyCopied] = useState(false);
-  const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-
-  const [testId, setTestId] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [empty, setEmpty] = useState(false);
-  const [calibrationId, setCalibrationId] = useState<string | null>(null);
-  const [calibrated, setCalibrated] = useState(false);
-  const [drainId, setDrainId] = useState<string | null>(null);
-  const [drains, setDrains] = useState<Drain[]>([]);
-  const [baseline, setBaseline] = useState<number | null>(null);
-
-  const test = useRecording(api, testId);
-  const calibration = useRecording(api, calibrationId);
-  const drain = useRecording(api, drainId);
-  const completed = drains.filter(d => d.seconds !== null);
-
-  function fail(err: unknown, fallback: string) {
-    setNeedsToken(err instanceof DrainApiError && err.status === 401);
-    setError(message(err, fallback));
-  }
-  async function run(task: () => Promise<void>, fallback: string) {
-    setBusy(true); setError('');
-    try { await task(); } catch (err) { fail(err, fallback); } finally { setBusy(false); }
-  }
-
-  useEffect(() => { if ((test.view?.record.measurements.length ?? 0) > 0) setConnected(true); }, [test.view]);
-  useEffect(() => {
-    const record = calibration.view?.record;
-    if (record?.recording_status !== 'finished') return;
-    if (record.calibration) setCalibrated(true);
-    else { setError('Calibration ended before the basin readings were stable. Check that both sensors read and try again.'); setCalibrationId(null); }
-  }, [calibration.view]);
-  useEffect(() => {
-    const view = drain.view;
-    if (!view || view.record.recording_status !== 'finished') return;
-    const seconds = view.record.result?.outcome === 'completed' ? view.record.result.drainage_time_seconds : null;
-    setDrains(previous => previous.some(d => d.record_id === view.record.record_id) ? previous : [...previous, { record_id: view.record.record_id, seconds }]);
-    if (seconds === null) setError(`That drain couldn't be timed: ${view.computed.forecast.message} Try again.`);
-    if (view.computed.drain_status?.baseline_seconds != null) setBaseline(view.computed.drain_status.baseline_seconds);
-    setDrainId(null);
-  }, [drain.view]);
-  useEffect(() => { if (step === 'teach' && completed.length >= BASELINE_DRAINS) setStep('done'); }, [step, completed.length]);
-
-  const finishTest = async () => { if (testId && test.view?.record.recording_status === 'recording') await api.finish(testId).catch(() => {}); };
-
-  async function addUnit(event: FormEvent) {
-    event.preventDefault();
-    await run(async () => {
-      try { await api.register(unit, location); }
-      catch (err) {
-        if (!(err instanceof DrainApiError && err.status === 409)) throw err;
-        const owned = (await api.devices()).devices.some(d => d.device_id === unit);
-        setExisting(owned);
-        throw Error(owned ? `${unit} is already in your fleet. Continue to issue it a new sensor key and finish setup.` : `${unit} is registered to another account. Check the ID printed on the sensor.`);
-      }
-      setSensorKey((await api.createDeviceKey(unit)).key);
-      setStep('connect');
-    }, 'Could not add the unit.');
-  }
-  async function continueExisting() {
-    await run(async () => { setSensorKey((await api.createDeviceKey(unit)).key); setExisting(false); setStep('connect'); }, 'Could not issue a sensor key.');
-  }
-
-  const authBlocked = Boolean(supabase) && !session;
-  const active = (view: RecordView | null) => view?.record.recording_status === 'recording';
-
+  const api=useMemo(()=>new DrainApi('/api/backend',session?.access_token||''),[session?.access_token]);
+  const [step,setStep]=useState<Step>('add');
+  const [unit,setUnit]=useState(''),[location,setLocation]=useState('');
+  const [method,setMethod]=useState<Method>('wifi');
+  const [existing,setExisting]=useState(false),[connected,setConnected]=useState(false),[empty,setEmpty]=useState(false);
+  const [calibrationId,setCalibrationId]=useState<string|null>(null),[initialObservationId,setInitialObservationId]=useState<string|null>(null);
+  const [reference,setReference]=useState<Calibration|null>(null);
+  const [recordId,setRecordId]=useState<string|null>(null);
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const [resumeFixture,setResumeFixture]=useState(''),[restoring,setRestoring]=useState(false),[restoreFailed,setRestoreFailed]=useState(false),[retry,setRetry]=useState(0);
+  const recording=useRecording(api,recordId);
+  const authBlocked=Boolean(supabase)&&!session;
+  const ready=reference?.drainage?.status==='ready';
+  function fail(err:unknown,fallback:string){setError(err instanceof DrainApiError&&err.status===401?'Please sign in again to continue setup.':err instanceof DrainApiError&&err.status>=500?'We could not connect right now. Try again, or contact your installer.':message(err,fallback));}
+  async function run(task:()=>Promise<void>,fallback:string){setBusy(true);setError('');try{await task();}catch(err){fail(err,fallback);}finally{setBusy(false);}}
+  useEffect(()=>{const fixture=new URLSearchParams(window.location.search).get('fixture');if(fixture&&/^[a-zA-Z0-9_-]{1,64}$/.test(fixture)){setUnit(fixture);setStep('connect');setResumeFixture(fixture);}},[]);
+  useEffect(()=>{document.getElementById('setup-title')?.focus();},[step]);
+  useEffect(()=>{
+    if(!resumeFixture||authBlocked)return;
+    const controller=new AbortController();setRestoring(true);setRestoreFailed(false);
+    void (async()=>{
+      try{
+        const[{records},{records:calibrations}]=await Promise.all([api.records(resumeFixture,'sensor',controller.signal),api.calibrationRecords(resumeFixture,'sensor',controller.signal)]);
+        if(controller.signal.aborted)return;
+        const active=records.find(r=>r.recording_status==='recording');
+        const saved=calibrations.find(r=>r.schema_version!==1&&r.calibration);
+        setConnected(false);
+        if(active?.record_type==='calibration'){setEmpty(true);setRecordId(active.record_id);setStep('teach');}
+        else if(saved?.calibration){setCalibrationId(saved.record_id);setReference(saved.calibration);setRecordId(null);setInitialObservationId(saved.calibration.drainage?.active_capture?.recording_id??(active?.record_type==='monitoring'?active.record_id:null));setStep(saved.calibration.drainage?.status==='ready'?'done':'drain');}
+        else{setReference(null);setRecordId(active?.record_type==='monitoring'?active.record_id:null);setStep('connect');}
+        setError('');
+        const registry=await api.devices(controller.signal);if(!controller.signal.aborted)setLocation(registry.devices.find(d=>d.device_id===resumeFixture)?.name??'');
+      }catch(err){if(!controller.signal.aborted){setRestoreFailed(true);fail(err,'Could not recover setup.');}}
+      finally{if(!controller.signal.aborted)setRestoring(false);}
+    })();return()=>controller.abort();
+  },[api,resumeFixture,retry,authBlocked]);
+  useEffect(()=>{
+    const view=recording.view;if(!view)return;
+    if(view.computed.sensor_connection==='connected')setConnected(true);
+    else if(view.record.recording_status==='recording')setConnected(false);
+    if(view.record.record_type!=='calibration'||view.record.recording_status!=='finished')return;
+    setRecordId(null);
+    if(view.record.calibration){setReference(view.record.calibration);setCalibrationId(view.record.record_id);setInitialObservationId(null);setStep('drain');}
+    else setError('The empty readings were not stable yet. Keep the sink empty and the sensor still, then try again.');
+  },[recording.view]);
+  async function addUnit(event:FormEvent){event.preventDefault();await run(async()=>{
+    try{await api.register(unit,location);}catch(err){if(!(err instanceof DrainApiError&&err.status===409))throw err;const owned=(await api.devices()).devices.some(d=>d.device_id===unit);setExisting(owned);throw Error(owned?'This unit is already yours. Resume its saved setup below.':'That unit belongs to another account. Check the ID printed on it.');}
+    window.history.replaceState(null,'',`/add-unit?fixture=${encodeURIComponent(unit)}`);
+    setStep('connect');
+  },'Could not add the unit.');}
+  async function finishConnection(){if(recordId)await api.finish(recordId);setRecordId(null);setStep('teach');}
   return <>
-    <header className={shell.header}>
-      <a className={shell.brand} href="/"><img src="/images/marketing/logo.png" width="32" height="32" alt="" /><span>Company Name</span></a>
-      <nav className={shell.navigation} aria-label="Main navigation">
-        <a href="/dashboard">Fleet</a>
-        <button disabled title="The building heat map is not available yet">Heat map</button>
-      </nav>
-      <a className={`${shell.primary} ${shell.addUnit} ${styles.headerAdd}`} href="/add-unit" aria-current="page">Add unit</a>
-      <MobileMenu><a href="/">Home</a><a href="/dashboard">Fleet / recordings</a><a href="/alerts">Alerts</a><a href="/login">Account</a></MobileMenu>
-    </header>
-
-    <main className={styles.layout}>
+    <ProductHeader active="add"/>
+    <main className={styles.layout}><OceanWaves setup/>
       <section className={styles.panel} aria-labelledby="setup-title">
-        <Stepper step={step} />
-
-        {authBlocked && <>
-          <h1 id="setup-title">Add a unit</h1>
-          <p className={styles.lead}>Sign in to register sensors to your account.</p>
-          <AccountPanel />
+        <Stepper step={step}/>
+        {authBlocked?<><h1 id="setup-title" tabIndex={-1}>Add a unit</h1><p className={styles.lead}>Sign in to register sensors to your account. Your saved setup will be here when you return.</p><AccountPanel/></>:<>
+        {(restoring||restoreFailed)&&<h1 id="setup-title" tabIndex={-1}>Resume unit setup</h1>}{restoring&&<p role="status">Recovering saved setup…</p>}
+        {restoreFailed&&<button className={shell.secondary} disabled={restoring} onClick={()=>setRetry(n=>n+1)}>Retry saved setup</button>}
+        {step==='add'&&!restoring&&!restoreFailed&&<form className={styles.form} onSubmit={addUnit}>
+          <div><h1 id="setup-title" tabIndex={-1}>Add a unit</h1><p className={styles.lead}>Connect your sensor, record the empty sink, then measure normal drainage.</p></div>
+          <label className={styles.field}><span>Unit ID</span><div className={styles.inputWrap}><input aria-label="Unit ID" aria-describedby="unit-hint" required pattern={UNIT_PATTERN} maxLength={64} placeholder="DR-4851" value={unit} onChange={e=>{setUnit(e.target.value.trim());setExisting(false);setError('');}}/><small id="unit-hint">Printed on the sensor</small></div></label>
+          <label className={styles.field}><span>Location</span><input required maxLength={100} placeholder="Floor 3, Room 304" value={location} onChange={e=>setLocation(e.target.value)}/></label>
+          <fieldset className={styles.methods}><legend>How will it connect?</legend>{([['wifi','Wi-Fi unit','Connected to your network'],['usb','USB unit','Connected by your installer']]as const).map(([value,title,hint])=><label key={value} className={method===value?styles.selected:''}><input type="radio" name="method" checked={method===value} onChange={()=>setMethod(value)}/>{value==='wifi'?<PhoneIcon/>:<ServerIcon/>}<strong>{title}</strong><small>{hint}</small></label>)}</fieldset>
+          <p className={styles.note}>{method==='usb'?'Leave the unit connected as your installer set it up.':'Your installer connects the unit to your network. You do not need to enter any connection settings here.'}</p>
+          <div className={styles.actions}>{existing?<button type="button" className={shell.primary} disabled={busy} onClick={()=>{setResumeFixture(unit);setRetry(n=>n+1);}}>Continue setup</button>:<button className={shell.primary} disabled={busy}>{busy?'Adding…':'Add and continue'}</button>}<a href="/dashboard" className={styles.cancel}>Cancel</a></div>
+        </form>}
+        {step==='connect'&&!restoring&&!restoreFailed&&<div className={styles.form}>
+          <div><h1 id="setup-title" tabIndex={-1}>Connect {unit}</h1><p className={styles.lead}>Leave the unit powered on. We will check its connection, then record the empty sink.</p></div>
+          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={()=>void run(async()=>{setConnected(false);setRecordId((await api.start(unit,'sensor','monitoring')).record_id);},'Could not check the connection.')}>Start connection test</button>:<><div className={`${styles.live} ${connected?styles.ok:''}`} role="status"><strong>{connected?'Sensor connected':(recording.view?.record.measurements.length??0)>0?'Check the sensor':'Waiting for the device…'}</strong><span>{reading(recording.view)??'Keep the unit powered on. If it does not connect, ask your installer to check it.'}</span></div></>}
+          <div className={styles.actions}><button className={shell.primary} disabled={!connected||busy||!recordId||Boolean(recording.error)} onClick={()=>void run(finishConnection,'Could not finish the connection check.')}>Continue</button><button className={styles.cancel} disabled={busy} onClick={()=>void run(async()=>{if(recordId)await api.finish(recordId);setRecordId(null);setStep('done');},'Could not save setup.')}>Finish later</button></div>
+        </div>}
+        {step==='teach'&&!restoring&&!restoreFailed&&<div className={styles.form}>
+          <div><h1 id="setup-title" tabIndex={-1}>Record the empty sink</h1><p className={styles.lead}>That is the baseline: the distance from the sensor to the sink with no water in it.</p></div>
+          <div className={styles.enrollment} role="status" aria-live="polite"><div className={styles.scanRing} style={{'--progress':`${(recording.view?.computed.calibration_progress??0)*100}%`}as CSSProperties}><span>{Math.round((recording.view?.computed.calibration_progress??0)*100)}%</span></div><strong>{recordId?'Keep the sink empty and still':'One quick empty-sink check'}</strong><p>Usually 8–10 seconds once the sensor is connected. Next, two guided drainage checks will measure this sink’s normal speed.</p></div>
+          <label className={styles.check}><input type="checkbox" checked={empty} disabled={Boolean(recordId)} onChange={e=>setEmpty(e.target.checked)}/>The sink is empty, the tap is off and the sensor is fixed in place.</label>
+          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={!empty||busy} onClick={()=>void run(async()=>setRecordId((await api.start(unit,'sensor','calibration',true)).record_id),'Could not record the empty sink.')}>Record empty sink</button>:<><progress max={1} value={recording.view?.computed.calibration_progress??0} aria-label="Empty baseline progress"/><p className={styles.note}>{recording.view?.computed.calibration_message??'Waiting for the sensor readings.'}</p><button className={shell.secondary} disabled={busy} onClick={()=>void run(async()=>{await api.finish(recordId);setRecordId(null);},'Could not stop the empty-sink check.')}>Stop and try again</button></>}
+        </div>}
+        {step==='drain'&&!restoring&&!restoreFailed&&reference&&calibrationId&&<DrainageSetup api={api} fixture={unit} calibrationId={calibrationId} calibration={reference} initialObservationId={initialObservationId} onSaved={value=>{setReference(value);if(value.drainage?.status==='ready')setStep('done');}}/>}
+        {step==='done'&&!restoring&&!restoreFailed&&<div className={styles.form}>
+          <div><h1 id="setup-title" tabIndex={-1}>{ready?`${unit} is ready`:`${unit} added`}</h1><p className={styles.lead}>{ready?'Empty reference and normal drainage speed saved. You can start monitoring now.':'Your progress is saved. Finish calibration when you are ready.'}</p></div>
+          {ready&&<div className={`${styles.live} ${styles.ok}`}><strong>Empty baseline</strong><span>Empty distance: {reference?.empty_distance_mm} mm</span>{reference?.drainage?.profile?.resolution==='instant'?<span>Very fast drain: the water empties almost instantly (under {Math.ceil(reference.drainage.baseline_duration_seconds??1)} s). You will be warned if it ever takes longer than {reference.drainage.profile.total.slow_seconds.toFixed(0)} s.</span>:<><span>Normal drainage: {reference?.drainage?.baseline_duration_seconds?.toFixed(2)} seconds from 30 mm to 10 mm</span><span>Level recession: {reference?.drainage?.baseline_recession_mm_per_second?.toFixed(2)} mm/s</span></>}<p>Two consistent tap-off checks are saved in this unit’s calibration for later alert comparisons.</p></div>}
+          <dl className={styles.summary}><div><dt>Unit ID</dt><dd>{unit}</dd></div><div><dt>Location</dt><dd>{location||'—'}</dd></div><div><dt>Empty sink</dt><dd>{ready?'Baseline saved':'Not recorded yet'}</dd></div></dl>
+          <div className={styles.actions}>{ready?<button className={shell.primary} disabled={busy} onClick={()=>void run(async()=>{const{records}=await api.records(unit,'sensor');const active=records.find(r=>r.recording_status==='recording');if(active&&active.record_type!=='monitoring')throw Error('Finish the active recording before starting monitoring.');let next:{record_id:string;calibration:Calibration|null}|undefined=active;if(next&&reference?.drainage?.runs.some(r=>r.recording_id===next!.record_id)){await api.finish(next.record_id);next=undefined;}next??=await api.start(unit,'sensor','monitoring');window.location.assign(`/live-demo?fixture=${encodeURIComponent(unit)}&source=sensor&record=${next.record_id}`);},'Could not start monitoring.')}>{busy?'Starting…':'Start monitoring'}</button>:<a className={shell.primary} href={`/add-unit?fixture=${encodeURIComponent(unit)}`}>Resume setup</a>}<a className={shell.secondary} href="/add-unit">Add another unit</a></div>
+        </div>}
+        {(error||recording.error)&&<p className={styles.error} role="alert">{error||recording.error}</p>}
+        {unit&&step!=='add'&&<div className={styles.actions}><a href={`/add-unit?fixture=${encodeURIComponent(unit)}`}>Save this setup link</a></div>}
         </>}
-
-        {!authBlocked && step === 'add' && <form onSubmit={addUnit} className={styles.form}>
-          <div>
-            <h1 id="setup-title">Add a unit</h1>
-            <p className={styles.lead}>Register a sensor, then teach it what a normal drain looks like.</p>
-          </div>
-          <label className={styles.field}><span>Unit ID</span>
-            <div className={styles.inputWrap}>
-              <input required pattern={UNIT_PATTERN} maxLength={64} placeholder="DR-4851" value={unit} onChange={e => { setUnit(e.target.value.trim()); setExisting(false); setError(''); }} aria-describedby="unit-hint" />
-              <small id="unit-hint">Printed on the sensor</small>
-            </div>
-          </label>
-          <label className={styles.field}><span>Location</span>
-            <input required maxLength={100} placeholder="Floor 3, Room 304" value={location} onChange={e => setLocation(e.target.value)} />
-          </label>
-          <fieldset className={styles.methods}>
-            <legend>How will it connect?</legend>
-            {([['wifi', 'Connect to Wi-Fi', 'Finish setup from your phone'], ['network', 'Already on network', 'The unit is already online']] as const).map(([value, title, hint]) =>
-              <label key={value} className={method === value ? styles.selected : ''}>
-                <input type="radio" name="method" value={value} checked={method === value} onChange={() => setMethod(value)} />
-                {value === 'wifi' ? <PhoneIcon /> : <ServerIcon />}
-                <strong>{title}</strong><small>{hint}</small>
-              </label>)}
-          </fieldset>
-          <p className={styles.note}>{method === 'wifi' ? "Next you'll get the unit's connection settings, then teach it what normal looks like." : "Next we'll check that readings arrive, then teach the unit what normal looks like."}</p>
-          {error && <p role="alert" className={styles.error}>{error}</p>}
-          <div className={styles.actions}>
-            {existing ? <button type="button" className={shell.primary} disabled={busy} onClick={() => void continueExisting()}>Continue setup</button>
-              : <button type="submit" className={shell.primary} disabled={busy}>{busy ? 'Adding…' : 'Add and continue'}</button>}
-            <a href="/dashboard" className={styles.cancel}>Cancel</a>
-          </div>
-        </form>}
-
-        {!authBlocked && step === 'connect' && <div className={styles.form}>
-          <div>
-            <h1 id="setup-title">Connect {unit}</h1>
-            <p className={styles.lead}>Give the unit its sensor key, then check that its readings reach us.</p>
-          </div>
-          {sensorKey && <div className={styles.keyBox}>
-            <strong>Sensor key</strong>
-            <p>Shown only once. The unit uses it to upload readings; it can&apos;t read or change anything else.</p>
-            <code>{sensorKey}</code>
-            <button type="button" className={shell.secondary} onClick={() => void navigator.clipboard.writeText(sensorKey).then(() => setKeyCopied(true))}>{keyCopied ? 'Copied' : 'Copy key'}</button>
-          </div>}
-          {method === 'wifi' && <p className={styles.note}>Phone-based Wi-Fi setup needs Wi-Fi firmware on the unit, which isn&apos;t available yet. For now, plug the unit into a computer and use the USB uploader with the settings below.</p>}
-          {!testId ? <button type="button" className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={() => void run(async () => setTestId((await api.start(unit, 'sensor', 'monitoring')).record_id), 'Could not start the connection test.')}>Start connection test</button>
-            : <>
-              <div className={`${styles.live} ${connected ? styles.ok : ''}`} role="status">
-                <strong>{connected ? `Receiving readings (${test.view?.record.measurements.length})` : 'Waiting for the first reading…'}</strong>
-                <span>{reading(test.view) ?? 'Start the uploader on the unit with the settings below.'}</span>
-              </div>
-              <DeviceConfig unit={unit} recordId={testId} sensorKey={sensorKey} />
-            </>}
-          {(error || test.error) && <p role="alert" className={styles.error}>{error || test.error}</p>}
-          <div className={styles.actions}>
-            <button type="button" className={shell.primary} disabled={!connected || busy} onClick={() => void run(async () => { await finishTest(); setStep('teach'); }, 'Could not finish the connection test.')}>Continue</button>
-            <button type="button" className={styles.cancel} onClick={() => void run(async () => { await finishTest(); setStep('done'); }, 'Could not finish the connection test.')}>Finish later</button>
-          </div>
-        </div>}
-
-        {!authBlocked && step === 'teach' && <div className={styles.form}>
-          <div>
-            <h1 id="setup-title">Teach baseline</h1>
-            <p className={styles.lead}>{!calibrated ? 'First, record the empty basin so the unit knows where "dry" is.' : `Now record ${BASELINE_DRAINS} normal drains. Alerts compare future drains against these.`}</p>
-          </div>
-
-          {!calibrated && <>
-            <label className={styles.check}><input type="checkbox" checked={empty} onChange={e => setEmpty(e.target.checked)} disabled={Boolean(calibrationId)} />The basin is empty, the tap is off and both sensors are fixed in place.</label>
-            {!calibrationId ? <button type="button" className={`${shell.primary} ${styles.big}`} disabled={!empty || busy} onClick={() => void run(async () => setCalibrationId((await api.start(unit, 'sensor', 'calibration', true)).record_id), 'Could not start calibration.')}>● Record empty basin</button>
-              : <>
-                <div className={styles.live} role="status">
-                  <strong>Recording empty basin… keep it still</strong>
-                  <progress max={1} value={calibration.view?.computed.calibration_progress ?? 0} />
-                  <span>{calibration.view?.computed.calibration_message ?? 'Waiting for readings.'}</span>
-                </div>
-                <DeviceConfig unit={unit} recordId={calibrationId} sensorKey={sensorKey} />
-              </>}
-          </>}
-
-          {calibrated && <>
-            <ol className={styles.drains}>
-              {Array.from({ length: BASELINE_DRAINS }, (_, i) => <li key={i} className={completed[i] ? styles.ok : ''}>
-                <span>Drain {i + 1}</span><strong>{completed[i] ? `${completed[i].seconds!.toFixed(1)} s` : i === completed.length && drainId ? 'Recording…' : '—'}</strong>
-              </li>)}
-            </ol>
-            {!drainId ? <>
-              <p className={styles.note}>Fill the basin as you normally would, press record, then pull the plug. The recording stops by itself once the basin is empty.</p>
-              <button type="button" className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={() => void run(async () => setDrainId((await api.start(unit, 'sensor', 'drainage')).record_id), 'Could not start the drain recording.')}>● Record drain {completed.length + 1} of {BASELINE_DRAINS}</button>
-            </> : <>
-              <div className={styles.live} role="status">
-                <strong>Drain now</strong>
-                <span>{drain.view?.computed.forecast.state === 'forecast' ? `About ${Math.ceil(drain.view.computed.forecast.seconds_remaining!)} seconds left` : drain.view?.computed.forecast.message ?? 'Waiting for readings.'}</span>
-                <span>{reading(drain.view)}</span>
-              </div>
-              <DeviceConfig unit={unit} recordId={drainId} sensorKey={sensorKey} />
-              {active(drain.view) && <button type="button" className={shell.secondary} disabled={busy} onClick={() => void run(async () => { await api.finish(drainId); }, 'Could not stop the recording.')}>Stop recording</button>}
-            </>}
-          </>}
-          {(error || calibration.error || drain.error) && <p role="alert" className={styles.error}>{error || calibration.error || drain.error}</p>}
-          <div className={styles.actions}><button type="button" className={styles.cancel} onClick={() => setStep('done')}>Finish later</button></div>
-        </div>}
-
-        {!authBlocked && step === 'done' && <div className={styles.form}>
-          <div>
-            <h1 id="setup-title">{completed.length >= BASELINE_DRAINS ? `${unit} is ready` : `${unit} added`}</h1>
-            <p className={styles.lead}>{completed.length >= BASELINE_DRAINS
-              ? `Normal drain time is ${baseline != null ? `${baseline.toFixed(1)} seconds` : 'set'}. You'll get an alert when drains get noticeably slower.`
-              : `The unit is registered. Status and alerts start once it has ${BASELINE_DRAINS} completed drains (${completed.length} so far). You can record them from the dashboard.`}</p>
-          </div>
-          <dl className={styles.summary}>
-            <div><dt>Unit ID</dt><dd>{unit}</dd></div>
-            <div><dt>Location</dt><dd>{location || '—'}</dd></div>
-            <div><dt>Connection</dt><dd>{connected ? 'Readings received' : 'Not tested'}</dd></div>
-            <div><dt>Empty basin</dt><dd>{calibrated ? 'Recorded' : 'Not recorded'}</dd></div>
-            <div><dt>Baseline drains</dt><dd>{completed.length} of {BASELINE_DRAINS}</dd></div>
-          </dl>
-          <div className={styles.actions}>
-            <a className={shell.primary} href={`/live-demo?fixture=${encodeURIComponent(unit)}&source=sensor`}>Open live view</a>
-            <a className={shell.secondary} href="/add-unit">Add another unit</a>
-          </div>
-        </div>}
-
-        {needsToken && <form className={styles.token} onSubmit={e => { e.preventDefault(); setToken(draftToken); setNeedsToken(false); setError(''); }}>
-          <label>Backend token <input type="password" autoComplete="off" value={draftToken} onChange={e => setDraftToken(e.target.value)} /></label>
-          <button className={shell.secondary}>Connect</button>
-        </form>}
       </section>
-
-      <aside className={styles.art} aria-hidden="true">
-        <img src="/images/live-view/cutaway.png" alt="" />
-        <span className={`${styles.callout} ${styles.calloutUnit}`}>{unit || 'DR-4851'} is printed on the sensor</span>
-        <span className={`${styles.callout} ${styles.calloutPhone}`}>{step === 'teach' ? 'Record the empty basin, then three drains' : 'Setup settings go on the unit'}</span>
-      </aside>
+      <aside className={styles.art} aria-hidden="true"><div className={styles.artCanvas}><DesignAsset file="71e2d.svg" className={styles.sinkScene}/><div className={styles.phoneArt}><DesignAsset file="26625.svg"/></div><span className={`${styles.callout} ${styles.calloutUnit}`}>{unit||'DR-4851'} is printed on the sensor</span><span className={`${styles.callout} ${styles.calloutPhone}`}>{step==='drain'?'Learn this sink’s normal drainage':step==='teach'?'Record the empty sink':'Connect, then calibrate'}</span></div></aside>
     </main>
   </>;
 }

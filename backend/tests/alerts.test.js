@@ -6,7 +6,7 @@ import { SQLiteRecordStore } from '../src/records-storage.js';
 import { createApp } from '../src/server.js';
 import { configFromEnv } from '../src/config.js';
 
-const point = (timestamp, ok = true) => ({ reading_id: randomUUID(), timestamp, sensor_a: ok ? { distance_mm: 200, status: 'ok' } : { distance_mm: null, status: 'timeout' }, sensor_b: { distance_mm: 210, status: 'ok' } });
+const point = (timestamp, ok = true) => ({ reading_id: randomUUID(), timestamp, sensor: ok ? { distance_mm: 200, status: 'ok' } : { distance_mm: null, status: 'timeout' } });
 const drain = (id, day, seconds, extra = {}) => ({
   record_id: id, fixture_id: 'sink', data_source: 'sensor', record_type: 'drainage', recording_status: 'finished',
   created_at: `2026-11-${String(day).padStart(2, '0')}T00:00:00.000Z`, calibration: null,
@@ -21,17 +21,17 @@ test('no alerts while a fixture is still learning its baseline', () => {
 });
 
 test('slow drains are warnings and very slow drains are critical', () => {
-  const alerts = buildAlerts([...baseline(), drain('slow', 4, 18), drain('severe', 5, 30)]);
+  const alerts = buildAlerts([...baseline(), drain('prior', 3, 21, {created_at:'2026-11-03T01:00:00.000Z'}), drain('slow', 4, 22), drain('severe', 5, 45)]);
   assert.deepEqual(types(alerts), ['slow_drain:severe', 'slow_drain:slow']);
   assert.equal(alerts[0].severity, 'critical');
   assert.equal(alerts[1].severity, 'warning');
-  assert.equal(alerts[1].details.ratio, 1.8);
-  assert.match(alerts[1].message, /1\.8× the usual 10\.0 seconds/);
+  assert.equal(alerts[1].details.ratio, 2.2);
+  assert.match(alerts[1].message, /2\.2× the usual 10\.0 seconds/);
 });
 
 test('a drain still running past three times the baseline is critical', () => {
   const now = Date.parse('2026-11-09T00:01:00.000Z');
-  const active = drain('live', 9, null, { recording_status: 'recording', measurements: [point('2026-11-09T00:00:00.000Z'), point('2026-11-09T00:00:59.000Z')] });
+  const active = drain('live', 9, null, { recording_status: 'recording', calibration: {empty_distance_mm: 250}, measurements: Array.from({length:61}, (_,i) => point(new Date(now-60000+i*1000).toISOString())) });
   const [first] = buildAlerts([...baseline(), active], now);
   assert.equal(first.type, 'running_too_long');
   assert.equal(first.severity, 'critical');
@@ -45,7 +45,7 @@ test('steadily rising drain times raise an early warning before they count as sl
 
 test('no trend warning when times fluctuate or are already flagged slow', () => {
   assert.deepEqual(buildAlerts([...baseline(), drain('d', 4, 13), drain('e', 5, 11), drain('f', 6, 14)]), []);
-  assert.deepEqual(types(buildAlerts([...baseline(), drain('d', 4, 11), drain('e', 5, 13), drain('f', 6, 16)])), ['slow_drain:f']);
+  assert.deepEqual(types(buildAlerts([...baseline(), drain('d', 4, 11), drain('e', 5, 13), drain('f', 6, 16)])), ['worsening_trend:f']);
 });
 
 test('unfinished drain times are reported for information only', () => {
@@ -76,7 +76,7 @@ test('an open recording that stops receiving readings is flagged', () => {
 });
 
 test('alerts are ordered by severity then newest first, with stable ids and counts', () => {
-  const alerts = buildAlerts([...baseline(), drain('w', 4, 18), drain('c1', 5, 30), drain('u', 6, null, { result: { drainage_time_seconds: null, outcome: 'uncertain' } })]);
+  const alerts = buildAlerts([...baseline(), drain('prior', 3, 21, {created_at:'2026-11-03T01:00:00.000Z'}), drain('w', 4, 22), drain('c1', 5, 45), drain('u', 6, null, { result: { drainage_time_seconds: null, outcome: 'uncertain' } })]);
   assert.deepEqual(alerts.map(a => a.severity), ['critical', 'warning', 'info']);
   assert.equal(alerts[0].alert_id, 'slow_drain:c1');
   assert.deepEqual(summarizeAlerts(alerts), { total: 3, critical: 1, warning: 1, info: 1 });
@@ -104,7 +104,7 @@ async function start(t) {
 
 test('alerts endpoint filters by fixture, source and severity and validates input', async t => {
   const { api, store } = await start(t);
-  for (const row of [...baseline(), drain('slow', 4, 18), drain('severe', 5, 30), drain('sim', 5, 30, { data_source: 'simulation' })]) {
+  for (const row of [...baseline(), drain('prior', 3, 21, {created_at:'2026-11-03T01:00:00.000Z'}), drain('slow', 4, 22), drain('severe', 5, 45), drain('sim', 5, 30, { data_source: 'simulation' })]) {
     await store.insert({ ...row, record_id: randomUUID() });
   }
   const all = await api('/alerts?fixture_id=sink&data_source=sensor', ADMIN);
@@ -124,10 +124,27 @@ test('alerts endpoint filters by fixture, source and severity and validates inpu
 test('alerts endpoint only shows fixtures the signed-in user can access', async t => {
   const { api, store } = await start(t);
   await api('/devices', 'alice-session', { device_id: 'sink', name: 'Alice sink' });
-  for (const row of [...baseline(), drain('slow', 4, 18)]) await store.insert({ ...row, record_id: randomUUID() });
-  assert.equal((await api('/alerts', 'alice-session')).body.alerts.length, 1);
+  for (const row of [...baseline(), drain('slow', 4, 22)]) await store.insert({ ...row, record_id: randomUUID() });
+  assert.equal((await api('/alerts', 'alice-session')).body.alerts.length, 0);
   assert.equal((await api('/alerts', 'bob-session')).body.alerts.length, 0);
   assert.equal((await api('/alerts?fixture_id=sink', 'bob-session')).status, 404);
   const key = (await api('/devices/sink/keys', 'alice-session', {})).body.key;
   assert.equal((await api('/alerts', key)).status, 403);
+});
+
+test('record list filters and limits do not relearn the baseline', async t => {
+  const {api,store} = await start(t);
+  const training = baseline().map(r => ({...r,record_id:randomUUID()}));
+  for (const row of training) await store.insert(row);
+  let latest;
+  for (let i=0;i<205;i++) {
+    latest = {...drain(randomUUID(),4,45),created_at:new Date(Date.parse('2026-11-04T00:00:00Z')+i*1000).toISOString()};
+    await store.insert(latest);
+  }
+  const list = await api('/records?fixture_id=sink&data_source=sensor&limit=1&recording_status=finished',ADMIN);
+  assert.equal(list.body.records.length,1);
+  assert.equal(list.body.records[0].drain_status.baseline_seconds,10);
+  const detail = await api(`/records/${latest.record_id}`,ADMIN);
+  assert.equal(detail.body.computed.drain_status.baseline_seconds,10);
+  assert.equal(detail.body.computed.drain_status.timeout_threshold_seconds,40);
 });

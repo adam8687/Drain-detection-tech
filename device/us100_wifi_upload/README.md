@@ -90,7 +90,7 @@ Wi-Fi and UTC clock ready.
 Saved measurement in Supabase.
 ```
 
-`Saved` confirms the API acknowledged the write. It does not mean both sensors
+`Saved` confirms the API acknowledged the write. It does not mean the sensor
 worked: a missing sensor is honestly stored as null/timeout. No credentials or
 raw server error responses are printed. Changing secrets.h requires another upload.
 
@@ -103,18 +103,10 @@ US-100 rear jumper **removed**:
 |---|---|
 | VCC | 3V3 |
 | GND | GND |
-| A Trig/TX | D1 |
-| A Echo/RX | D0 |
-| Optional B Trig/TX | D3 |
-| Optional B Echo/RX | D2 |
+| Trig/TX | D1 |
+| Echo/RX | D0 |
 
-Sensor B shares power/GND. Set `SECOND_SENSOR_ENABLED = true` in secrets.h when it is actually
-connected. The sensors fire sequentially with a pause; verify interference and
-accuracy with your physical setup. For UART, install both mode jumpers and set
-`USE_UART = true`; the same pin mapping uses 9600 baud. Distances are numeric
-millimeters (20–4500); missing/invalid echoes use null with timeout/out_of_range.
-The default one-sensor setup supports transport testing in monitoring mode only.
-Calibration and drainage completion require **both** sensors to work.
+One US-100 supports calibration, drainage and monitoring. For UART install its rear mode jumper and set `USE_UART = true`; the same pins use 9600 baud. Distances are numeric millimeters (20–4500); missing/invalid echoes use null with timeout/out_of_range. The firmware samples every 500 ms and emits one `sensor` object per point.
 
 Run the frontend in another terminal:
 
@@ -135,11 +127,11 @@ configuration and apply the documented access migration if using fixture keys.
 
 1. Stop/power down the board, ensure all acknowledged points were saved, and
    finish its monitoring recording on the website.
-2. Mount both sensors in their final positions and confirm the fixture is empty.
+2. Mount the sensor in its final position and confirm the fixture is empty.
 3. Run `npm run device:setup -- wifi-bench calibration --confirm-empty` (or
    create that Sensor calibration as the owner on the website).
-4. Copy the new record ID into secrets.h, enable B, and upload. The backend needs
-   at least 20 valid stable paired readings spanning eight seconds. The board
+4. Copy the new record ID into secrets.h and upload. The backend needs
+   at least 20 valid stable single-sensor readings spanning eight seconds. The board
    stops when the API acknowledges automatic calibration completion.
 5. Run `npm run device:setup -- wifi-bench drainage`, copy its new record ID,
    and upload. Start the recording while there is water, then release the drain
@@ -181,3 +173,5 @@ or provision a new record to the board. Those are separate future improvements.
   automatic; reset/reboot recording recovery remains deliberately manual.
 - Compile checks establish firmware compatibility, not physical measurements or
   successful Wi-Fi/TLS connectivity. Verify those on your actual board/network.
+
+Current single-sensor setup: apply `supabase/migrations/202611120001_single_sensor.sql`, use the matching one-sensor firmware, and save a fresh empty-sink reference. See the root README for upgrade preservation and traffic reductions.

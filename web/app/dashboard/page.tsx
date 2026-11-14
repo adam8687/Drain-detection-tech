@@ -1,135 +1,29 @@
 'use client';
-
-import { useEffect, useMemo, useState } from 'react';
+import {useEffect,useState} from 'react';
+import ProductHeader from '../../components/product-header';
+import OceanWaves from '../../components/ocean-waves';
+import DesignAsset from '../../components/design-asset';
 import AccountPanel from '../../components/account-panel';
-import { useSession } from '../../lib/supabase';
-import { DrainApi, DrainApiError } from '../../lib/api';
-import type { AlertSummary, DataSource, DrainStatus, RecordSummary, RecordView } from '../../lib/api';
+import RecordingWorkbench from '../../components/recording-workbench';
+import {useFleet} from '../../lib/use-fleet';
+import type {FleetCategory,FixtureCard} from '../../lib/use-fleet';
+import {FleetFilters,FixtureTile,fixtureHref} from '../../components/fleet-parts';
 import styles from './page.module.css';
-
-const STATUS_TEXT: Record<DrainStatus['status'], string> = { learning: 'Learning baseline', unknown: 'Status unavailable', in_progress: 'Draining', normal: 'Normal', slow_drain: 'Slow drain', running_too_long: 'Running too long' };
-function StatusPill({ value }: { value: DrainStatus | null | undefined }) {
-  if (!value) return null;
-  const detail = value.baseline_seconds === null ? 'Needs 3 completed drains' : `Baseline ${value.baseline_seconds.toFixed(1)} s${value.ratio === null ? '' : ` · ${value.ratio.toFixed(2)}×`}`;
-  return <span className={`${styles.status} ${styles[`status_${value.status}`]}`} title={detail}>{STATUS_TEXT[value.status]}</span>;
-}
-
-export default function DashboardPage() {
-  const session = useSession();
-  const [fixture, setFixture] = useState(process.env.NEXT_PUBLIC_DEFAULT_FIXTURE_ID || 'practice-sink-v2');
-  const [source, setSource] = useState<DataSource>(process.env.NEXT_PUBLIC_DEFAULT_DATA_SOURCE === 'sensor' ? 'sensor' : 'simulation');
-  const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
-  const [needsToken, setNeedsToken] = useState(false);
-  const [records, setRecords] = useState<RecordSummary[]>([]);
-  const [id, setId] = useState(''); const [sample, setSample] = useState<number | null>(null);
-  const [view, setView] = useState<RecordView | null>(null);
-  const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [confirmed, setConfirmed] = useState(false);
-  const [refresh, setRefresh] = useState(0);
-  const [alerts, setAlerts] = useState<AlertSummary | null>(null);
-  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || token), [token, session?.access_token]);
-  const reportError = (err: unknown) => { setNeedsToken(err instanceof DrainApiError && err.status === 401); setError(err instanceof Error ? err.message : 'Backend unavailable'); };
-  useEffect(() => {
-    const controller = new AbortController(); setView(null); setRecords([]); setError('');
-    const timer = setTimeout(() => { void api.records(fixture, source, controller.signal).then(value => {
-      if (controller.signal.aborted) return;
-      setRecords(value.records); setNeedsToken(false);
-      setId(previous => value.records.some(r => r.record_id === previous) ? previous : value.records.find(r => r.recording_status === 'recording')?.record_id || value.records.find(r => r.result?.outcome === 'completed')?.record_id || value.records.find(r => r.record_type === 'drainage')?.record_id || value.records[0]?.record_id || '');
-      setSample(null);
-    }).catch(err => { if (!controller.signal.aborted) reportError(err); }); }, 250);
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, fixture, source, refresh]);
-  useEffect(() => {
-    const controller = new AbortController(); setAlerts(null);
-    const timer = setTimeout(() => { void api.alerts({ fixture, source, limit: 1 }, controller.signal).then(value => { if (!controller.signal.aborted) setAlerts(value.summary); }).catch(() => {}); }, 300);
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, fixture, source, refresh]);
-  useEffect(() => {
-    if (!id || !records.some(r => r.record_id === id)) return;
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      try {
-        const value = await api.record(id, sample, controller.signal);
-        if (controller.signal.aborted) return;
-        setView(value); setError(''); setNeedsToken(false);
-        if (value.record.recording_status === 'recording') timer = setTimeout(load, 750);
-      } catch (err) { if (!controller.signal.aborted) reportError(err); }
-    };
-    timer = setTimeout(() => void load(), 120);
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, id, sample, records]);
-  async function action(type: 'calibration' | 'drainage' | 'monitoring' | 'finish') {
-    setBusy(true); setError('');
-    try {
-      if (type === 'finish') { if (!view) return; await api.finish(view.record.record_id); }
-      else { const next = await api.start(fixture, source, type, confirmed); setId(next.record_id); }
-      setRefresh(n => n + 1);
-    } catch (err) { reportError(err); } finally { setBusy(false); }
-  }
-  const active = view?.record.recording_status === 'recording';
-  const chart = view?.computed.timeline ?? [];
-  const maxX = Math.max(10, ...chart.map(p => p.elapsed_seconds)), maxY = Math.max(10, ...chart.map(p => p.seconds_remaining ?? 0));
-  let drawing = false;
-  const path = chart.map(p => { if (p.seconds_remaining === null) { drawing = false; return ''; } const prefix = drawing ? 'L' : 'M'; drawing = true; return `${prefix}${60 + p.elapsed_seconds / maxX * 590},${220 - p.seconds_remaining / maxY * 180}`; }).join(' ');
-  const live = (view?.record.measurements ?? []).slice(-120).map(m => ({ d: m.sensor_a.status === 'ok' ? m.sensor_a.distance_mm : null }));
-  const liveMax = Math.max(100, ...live.map(p => p.d ?? 0));
-  let liveDrawing = false;
-  const livePath = live.map((p, i) => { if (p.d === null) { liveDrawing = false; return ''; } const prefix = liveDrawing ? 'L' : 'M'; liveDrawing = true; return `${prefix}${60 + i / Math.max(1, live.length - 1) * 590},${180 - p.d / liveMax * 150}`; }).join(' ');
-  const results = records.filter(r => r.result?.outcome === 'completed');
-  const maxDuration = Math.max(1, ...results.map(r => r.result!.drainage_time_seconds!));
-  return <main className={styles.shell}>
-    <a href="/">← Back to home</a>
-    <h1>Drainage insights</h1>
-    <a href="/alerts">All alerts →</a>
-    <div id="account" tabIndex={-1}><AccountPanel /></div>
-    <div className={styles.controls}>
-      <label>Fixture <input aria-label="Fixture" value={fixture} onChange={e => { setFixture(e.target.value); setId(''); }} /></label>
-      <label>Data <select value={source} onChange={e => { setSource(e.target.value as DataSource); setId(''); }}><option value="simulation">Simulation</option><option value="sensor">Physical sensors</option></select></label>
-      <button onClick={() => setRefresh(n => n + 1)}>Refresh</button>
-    </div>
-    {needsToken && <form onSubmit={e => { e.preventDefault(); setToken(draftToken); }}><label>Backend token <input type="password" autoComplete="off" value={draftToken} onChange={e => setDraftToken(e.target.value)} /></label><button>Connect</button></form>}
-    {error && <p role="alert">{error}</p>}
-    <div className={styles.controls}>
-      <label>Recording <select value={id} onChange={e => { setId(e.target.value); setSample(null); setView(null); }}><option value="">Select a recording</option>{records.map(r => <option key={r.record_id} value={r.record_id}>{r.record_type} · {r.result?.drainage_time_seconds != null ? `${r.result.drainage_time_seconds.toFixed(1)} seconds` : r.result?.outcome || r.recording_status} · {new Date(r.created_at).toLocaleDateString()}</option>)}</select></label>
-      {view && !active && view.computed.sample_count > 0 && <label>Replay <input type="range" min="0" max={view.computed.sample_count - 1} value={sample ?? view.computed.sample_count - 1} onChange={e => setSample(Number(e.target.value))} /><output>{view.computed.elapsed_seconds.toFixed(1)} seconds</output></label>}
-    </div>
-    {alerts && alerts.critical + alerts.warning > 0 && <a className={`${styles.alertBanner} ${alerts.critical ? styles.alertBannerCritical : ''}`} href={`/alerts?fixture=${encodeURIComponent(fixture)}&source=${source}`}>
-      <strong>{alerts.critical ? `${alerts.critical} critical` : `${alerts.warning} warning`}{alerts.critical && alerts.warning ? ` · ${alerts.warning} warning` : ''}</strong>
-      <span>alert{alerts.critical + alerts.warning === 1 ? '' : 's'} for this fixture. View alerts →</span>
-    </a>}
-    {!records.length && !error && <p>No recordings. Run <code>npm run seed:practice</code> for saved examples, or start a recording below.</p>}
-    {view && <>
-      <a href={`/live-demo?fixture=${encodeURIComponent(fixture)}&record=${encodeURIComponent(view.record.record_id)}&source=${source}`}>Open live view →</a>
-      <div className={styles.badge}>{source === 'simulation' ? 'Simulated sensor data' : 'Physical sensor data'} · {active ? 'Live recording' : 'Saved recording'}</div>
-      <div className={styles.metrics}>
-        {view.computed.drain_status && <div><span>Drain status</span><strong><StatusPill value={view.computed.drain_status} /></strong><small>{view.computed.drain_status.baseline_seconds === null ? 'Needs 3 completed drains for a baseline' : `Baseline ${view.computed.drain_status.baseline_seconds.toFixed(1)} seconds`}</small></div>}
-        <div><span>Time left to drain</span><strong>{view.computed.forecast.state === 'forecast' ? `About ${Math.ceil(view.computed.forecast.seconds_remaining!)} seconds` : view.computed.forecast.state === 'dry' ? 'No measurable water' : 'Estimate unavailable'}</strong></div>
-        <div><span>Recorded drainage time</span><strong>{view.record.result?.drainage_time_seconds != null ? `${view.record.result.drainage_time_seconds.toFixed(1)} seconds` : view.record.result?.outcome || 'Not finished'}</strong></div>
-        <div><span>Measurements</span><strong>{view.computed.sample_count}</strong></div>
-      </div>
-      <p className={styles.explanation} role="status">{view.record.record_type === 'calibration' ? view.computed.calibration_message : view.computed.forecast.message}</p>
-      {view.record.record_type === 'calibration' && active && <progress max="1" value={view.computed.calibration_progress ?? 0} aria-label="Calibration progress" />}
-      <figure className={styles.chart}><figcaption><h3>Live sensor A distance</h3><p>{live.length ? `Latest ${live[live.length - 1].d === null ? 'no valid reading' : `${live[live.length - 1].d} mm`} · last ${live.length} readings, updates every ~1 s` : 'No readings yet.'}</p></figcaption>
-        <svg viewBox="0 0 700 220" role="img" aria-label="Sensor A distance in millimetres over the latest readings">
-          {[0,1,2,3].map(i => <g key={i}><line x1="60" x2="650" y1={180 - i * 50} y2={180 - i * 50} stroke="currentColor" opacity=".12" /><text x="50" y={184 - i * 50} textAnchor="end" fill="currentColor" fontSize="12">{Math.round(liveMax * i / 3)}</text></g>)}
-          <text x="60" y="14" fill="currentColor" fontSize="12">Distance (mm)</text><path d={livePath} fill="none" stroke="#16a34a" strokeWidth="2" />
-        </svg>
-      </figure>
-      <figure className={styles.chart}><figcaption><h3>Estimated time left to drain</h3><p>Calculated by the backend. Gaps mean an estimate was unavailable.</p></figcaption>
-        <p className={styles.chartHint}>Swipe horizontally to explore the chart.</p>
-        <svg viewBox="0 0 700 280" role="img" aria-label="Estimated seconds remaining against elapsed seconds">
-          {[0,1,2,3,4].map(i => <g key={i}><line x1="60" x2="650" y1={220 - i * 45} y2={220 - i * 45} stroke="currentColor" opacity=".12" /><text x="50" y={224 - i * 45} textAnchor="end" fill="currentColor" fontSize="12">{Math.round(maxY * i / 4)}</text><text x={60 + i * 147.5} y="244" textAnchor="middle" fill="currentColor" fontSize="12">{Math.round(maxX * i / 4)}</text></g>)}
-          <text x="60" y="20" fill="currentColor" fontSize="12">Seconds remaining</text><path d={path} fill="none" stroke="#2563eb" strokeWidth="2.5" /><text x="350" y="272" textAnchor="middle" fill="currentColor" fontSize="12">Elapsed seconds</text>
-        </svg>
-      </figure>
-      <details className={styles.chart}><summary>Sensor readings and calibration</summary><pre style={{ overflowX: 'auto', fontSize: 12 }}>{JSON.stringify({ calibration: view.record.calibration, latest_measurement: view.record.measurements[view.computed.sample_index], result: view.record.result }, null, 2)}</pre></details>
-    </>}
-    {results.length > 0 && <figure className={styles.chart}><figcaption><h3>Drainage time by recording</h3><p>Shorter bars mean faster drainage.</p></figcaption><div className={styles.bars}>{[...results].reverse().map((r, i) => <div className={styles.barRow} key={r.record_id}><span>Test {i + 1}</span><div className={styles.barTrack}><div style={{ width: `${r.result!.drainage_time_seconds! / maxDuration * 100}%` }} /></div><strong>{r.result!.drainage_time_seconds!.toFixed(1)} seconds</strong><StatusPill value={r.drain_status} /></div>)}</div></figure>}
-    <details className={styles.chart}><summary>Recording controls</summary><div className={styles.controls}>
-      <label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />Fixture is empty, tap off, sensors fixed.</label>
-      <button disabled={busy || !confirmed || active} onClick={() => void action('calibration')}>Calibrate empty fixture</button>
-      <button disabled={busy || active} onClick={() => void action('drainage')}>Start drainage</button>
-      <button disabled={busy || active} onClick={() => void action('monitoring')}>Start monitoring</button>
-      <button disabled={busy || !active} onClick={() => void action('finish')}>Finish recording</button>
-    </div></details>
-  </main>;
+export default function DashboardPage(){
+ const data=useFleet();const[hover,setHover]=useState<FixtureCard|null>(null),[query,setQuery]=useState(''),[filter,setFilter]=useState<'all'|FleetCategory>('all'),[expanded,setExpanded]=useState(false),[workbench,setWorkbench]=useState(false);
+ useEffect(()=>setQuery(new URLSearchParams(window.location.search).get('q')||''),[]);
+ const visible=data.fixtures.filter(f=>(filter==='all'||f.category===filter)&&`${f.id} ${f.name}`.toLowerCase().includes(query.toLowerCase()));
+ const attention=visible.filter(f=>['high','moderate','offline'].includes(f.category)),baseline=visible.filter(f=>f.category==='baseline'),good=visible.filter(f=>f.category==='good');
+ const count=data.fixtures.filter(f=>['high','moderate','offline'].includes(f.category)).length;
+ return <><ProductHeader active="fleet" query={query} onQuery={setQuery}/><main className={styles.shell}><OceanWaves/>
+  <div className={styles.heading}><h1>Dashboard</h1><p>{data.fixtures.length} {data.fixtures.length===1?'unit':'units'} · {data.source==='sensor'?'Physical sensors':'Simulation recordings'}</p></div>
+  <div className={styles.tools}><label>Data <select aria-label="Data" value={data.source} onChange={e=>data.setSource(e.target.value as 'sensor'|'simulation')}><option value="sensor">Physical sensors</option><option value="simulation">Simulation</option></select></label><button onClick={data.refresh} disabled={data.loading}>Refresh</button><details><summary>Account</summary><AccountPanel/></details></div>
+  {data.error&&<div role="alert" className={styles.notice}><p>{data.error}</p>{data.needsAuth&&<><a href="/login">Sign in to your account</a></>}</div>}
+  <section className={styles.summary} aria-label="Fleet overview"><div className={styles.summaryTop}><div className={styles.summaryIcon}><DesignAsset file="d7111.svg"/></div><strong className={styles.total}>{count}</strong><p><span>of {data.fixtures.length} units</span><strong>need attention</strong></p><a className={styles.secondary} href={`/alerts?source=${data.source}`}>{data.alerts.length} alerts</a></div><FleetFilters fixtures={data.fixtures} value={filter} onChange={setFilter}/><div className={styles.pipeStrip} aria-label="Units ordered by urgency">{data.fixtures.map(f=><a key={f.id} className={styles[f.category]} href={fixtureHref(f,data.source)} title={`${f.id}: ${f.name} · ${f.status}`} aria-label={`${f.name}: ${f.status}`} onMouseEnter={()=>setHover(f)} onMouseLeave={()=>setHover(null)} onFocus={()=>setHover(f)} onBlur={()=>setHover(null)}/>)}</div><div className={styles.stripCaption}><span aria-live="polite">{hover?`${hover.id}, ${hover.name}: ${hover.status}${hover.seconds!=null?`, last drain ${hover.seconds.toFixed(hover.seconds>=100?0:1)} s`:''}`:data.loading?'Updating fleet…':data.fixtures.length?'':'Add your first unit to begin.'}</span><span>Every block is one unit, most urgent on the left. Hover to identify, click to open.</span></div></section>
+  {!data.loading&&!visible.length&&<section className={styles.notice}><h2>{data.fixtures.length?'No units match this filter':'Connect your first unit'}</h2><p>Connect the sensor and record a short empty-sink reference.</p><a className={styles.primary} href="/add-unit">Add unit</a></section>}
+  {attention.length>0&&<section className={styles.section}><h2>Needs attention <small>{attention.length}</small></h2><div className={styles.cardGrid}>{attention.slice(0,expanded?undefined:8).map(f=><FixtureTile key={f.id} fixture={f} source={data.source}/>)}</div>{attention.length>8&&!expanded&&<button className={styles.secondary} onClick={()=>setExpanded(true)}>Show {attention.length-8} more</button>}</section>}
+  {baseline.length>0&&<section className={styles.section}><h2>Needs baseline <small>{baseline.length}</small></h2><div className={styles.cardGrid}>{baseline.map(f=><FixtureTile key={f.id} fixture={f} source={data.source}/>)}</div></section>}
+  {good.length>0&&<section className={styles.section}><h2>Looks good <small>{good.length}</small></h2><div className={styles.goodGrid}>{good.map(f=><FixtureTile key={f.id} fixture={f} source={data.source} compact/>)}</div></section>}
+  <section className={styles.recordingTools}><button className={styles.secondary} aria-expanded={workbench} onClick={()=>setWorkbench(v=>!v)}>Installer tools</button>{workbench&&<RecordingWorkbench/>}</section>
+ </main></>;
 }

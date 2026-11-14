@@ -1,0 +1,10 @@
+.top { position: absolute; top: -44.44px; right: -73.22px; width: 514.098px; height: 201px; pointer-events: none; overflow: visible; }
+.top img { position: absolute; display: block; max-width: none; }
+.top img:nth-child(1) { left: -10px; top: -20px; } .top img:nth-child(2) { left: 105.92px; top: -16.37px; } .top img:nth-child(3) { left: 213.11px; top: -12.71px; }
+.setupBottom { position: absolute; bottom: -62px; left: -73.84px; pointer-events: none; }
+.bottom { position: absolute; bottom: -20px; left: -133px; width: 900px; height: 360px; pointer-events: none; }
+.bottom img { position: absolute; display: block; transform: rotate(-174.44deg); }
+.bottom img:nth-child(1) { bottom: 0; left: 0; } .bottom img:nth-child(2) { bottom: -5px; left: 31px; } .bottom img:nth-child(3) { bottom: -25px; left: 96px; }
+@media(max-width:640px) { .top { right: -270px; opacity:.7; } .bottom { left: -350px; } }
+
+.top,.bottom,.setupBottom { z-index:-1; }

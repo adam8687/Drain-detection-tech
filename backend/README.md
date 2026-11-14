@@ -5,7 +5,7 @@ The recommended wireless path now runs these calculations inside Supabase:
 for local development and USB uploads. Its stateless domain/auth/alert functions
 are shared with the Edge Function rather than duplicated.
 
-Node.js 24+, no dependency install. `npm start` from the root loads `backend/.env`, uses Supabase by default, and fails startup if `drain_records` cannot be read. There is no silent SQLite fallback. Apply `supabase/migrations/202610270001_drain_records.sql` before starting. Run `npm run migrate:records` to copy legacy Supabase records while older writers are stopped. See the root README for the complete upgrade/run/push sequence.
+Node.js 24+, no dependency install. `npm start` from the root loads `backend/.env`, uses Supabase by default, and fails startup if `drain_records` cannot be read. There is no silent SQLite fallback. Apply `supabase/migrations/202610270001_drain_records.sql` and `supabase/migrations/202611120001_single_sensor.sql` before starting. Run `npm run migrate:records` to copy legacy Supabase records while older writers are stopped. See the root README for the complete upgrade/run/push sequence.
 
 ## Canonical routes
 
@@ -29,21 +29,20 @@ Use `record_type: "drainage"` after successful calibration, or `monitoring` to r
 {
   "reading_id":"1c3b45dd-0994-44ac-a48f-4dd8bc781a53",
   "timestamp":"2026-10-27T12:00:00.000Z",
-  "sensor_a":{"distance_mm":313,"status":"ok"},
-  "sensor_b":{"distance_mm":null,"status":"timeout"}
+  "sensor":{"distance_mm":313,"status":"ok"}
 }
 ```
 
-The ESP32 generates a new UUID per paired sample and reuses the exact body on retry. Timestamp must include a timezone; synchronize its clock before recording. Normalize to UTC, keep the clock continuous, and start a new recording after a clock reset. There is no boot ID, sample number, temperature or echo-time input in this distance-only API. Failed readings use a null distance and `timeout` or `out_of_range` status. Distance limits are 20–4500 mm; validate actual purchased hardware separately.
+The ESP32 generates a new UUID per sample and reuses the exact body on retry. Timestamp must include a timezone; synchronize its clock before recording. Normalize to UTC, keep the clock continuous, and start a new recording after a clock reset. There is no boot ID, sample number, temperature or echo-time input in this distance-only API. Failed readings use a null distance and `timeout` or `out_of_range` status. Distance limits are 20–4500 mm; validate actual purchased hardware separately.
 
 201 means persistence succeeded. 200 means an identical point was already stored. Conflicting IDs, new measurements on a finished record, or full recordings return 409. The backend uses atomic compare-and-set retries to avoid losing concurrent appends. Raw measurement requests are limited to 16KB and recordings to 5000 points. Close and start a new monitoring window at that limit.
 
-Empty calibration auto-finishes after at least 20 valid stable paired samples spanning eight seconds. Drainage auto-finishes only after water has been observed and both sensors confirm dry for consecutive samples. Results are calculated and saved on the backend. Finishing an incomplete drainage record stores an incomplete/uncertain result; a failed calibration can be finished but is not selected as a usable baseline. New recordings copy the latest usable calibration for the same fixture and data source, so recalibration does not change old baseline snapshots.
+Empty calibration auto-finishes after at least 20 valid stable single-sensor samples spanning eight seconds. Drainage auto-finishes only after water has been observed and the sensor confirm dry for consecutive samples. Results are calculated and saved on the backend. Finishing an incomplete drainage record stores an incomplete/uncertain result; a failed calibration can be finished but is not selected as a usable baseline. New recordings copy the latest usable calibration for the same fixture and data source, so recalibration does not change old baseline snapshots.
 
 ### Retrieve, replay and finish
 
 - `GET /api/v1/records`: summary list, optional `fixture_id`, `data_source`, `record_type`, `recording_status`, `limit` (1–200).
-- `GET /api/v1/records/{id}`: `{ record, computed }`. `computed` contains backend forecast, countdown timeline, sample count, staleness and calibration progress. It also includes `water_levels`: calibrated paired sensor depths in millimeters, elapsed seconds from the first reading, and `gap_before` markers for gaps beyond the backend limit. Missing calibration or invalid paired measurements yield null depths; replay returns only the visible prefix.
+- `GET /api/v1/records/{id}`: `{ record, computed }`. `computed` contains backend forecast, countdown timeline, sample count, staleness and calibration progress. It also includes `water_levels`: calibrated sensor depth in millimeters, elapsed seconds from the first reading, and `gap_before` markers for gaps beyond the backend limit. Missing calibration or invalid single-sensor measurements yield null depths; replay returns only the visible prefix.
 - Add `?sample=20` to replay only the observations available through that sample. No future measurements are used for its estimate.
 - `POST /api/v1/records/{id}/finish`: finish and persist the result; safe to repeat.
 - `GET /api/v1/records/{id}/stream`: authenticated fetch SSE, with connected/snapshot/unavailable events and heartbeats. It polls persistent storage and sees external writers. The frontend currently uses REST polling for active recordings.
@@ -60,3 +59,5 @@ The old `src/storage.js`, `src/domain.js`, fixture-calibration helper and older 
 ## Sign-in and sensor authorization
 
 Upstream sign-in, fixture ownership/viewer roles and hashed sensor keys are retained. Recording data uses `drain_records`; `dm_devices`, `dm_device_members` and `dm_device_keys` remain access-control metadata. Apply `supabase/migrations/202610270002_records_access.sql` after the drain_records migration, including on new projects. Existing ownership/key rows are retained. Enable browser sign-in with `NEXT_PUBLIC_SUPABASE_URL` and a publishable `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; never expose the server secret. Registered users see only their fixtures and may manage them only as owners. Sensor keys can only append to physical-sensor recordings for their fixture; owners initiate recordings. The existing unauthenticated local-prototype mode remains only when API_KEY is unset. Do not expose that mode publicly.
+
+Current single-sensor setup: apply `supabase/migrations/202611120001_single_sensor.sql`, use the matching one-sensor firmware, and save a fresh empty-sink reference. See the root README for upgrade preservation and traffic reductions.

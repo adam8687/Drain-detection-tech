@@ -25,7 +25,7 @@ test('firmware escapes credentials, carries sensor settings and refuses admin ke
   const header = firmwareHeader(config, randomUUID(), 'dk_test-fixture');
   assert.ok(header.includes(JSON.stringify(wifi.WIFI_SSID)));
   assert.ok(header.includes(JSON.stringify(wifi.WIFI_PASSWORD)));
-  assert.ok(header.includes('constexpr bool SECOND_SENSOR_ENABLED = true;'));
+  assert.ok(!header.includes('SECOND_SENSOR_ENABLED'));
   assert.ok(header.includes('constexpr bool USE_UART = true;'));
   assert.ok(!header.includes('SUPABASE_SECRET_KEY'));
   assert.throws(() => firmwareHeader(config, randomUUID(), 'sb_secret_do-not-use'));
@@ -64,7 +64,7 @@ test('Wi-Fi preparation scopes sensor keys, preserves active measurements and st
   let retainedKey;
   const first = await prepareRecord({ config, token: 'admin-test', fixture: 'friend-test', type: 'monitoring', previous: { saveKey: key => { retainedKey = key; } } });
   assert.equal(retainedKey, first.key);
-  const point = { reading_id: randomUUID(), timestamp: new Date().toISOString(), sensor_a: { distance_mm: 314, status: 'ok' }, sensor_b: { distance_mm: null, status: 'timeout' } };
+  const point = { reading_id: randomUUID(), timestamp: new Date().toISOString(), sensor: { distance_mm: 314, status: 'ok' } };
   await api(local, first.key, `/records/${first.record.record_id}/measurements`, point);
   const second = await prepareRecord({ config, token: 'admin-test', fixture: 'friend-test', type: 'monitoring', previous: { key: first.key } });
   assert.equal(second.record.record_id, first.record.record_id);
@@ -77,20 +77,19 @@ test('Wi-Fi preparation scopes sensor keys, preserves active measurements and st
   assert.notEqual(next.record.record_id, first.record.record_id);
 });
 
-test('calibration requires both sensors and empty confirmation before any network mutation', async () => {
+test('calibration requires the sensor and empty confirmation before any network mutation', async () => {
   const config = settings({}, wifi, interfaces);
   const request = () => { throw Error('Unexpected network request'); };
-  await assert.rejects(prepareRecord({ config, fixture: 'sink', type: 'calibration', confirmEmpty: true, request }), /two working sensors/);
   await assert.rejects(prepareRecord({ config: { ...config, second: true }, fixture: 'sink', type: 'calibration', request }), /confirm-empty/);
 });
 
 test('watch requires a new sensor point and exact cloud/frontend readback', () => {
-  const recordId = randomUUID(), point = { reading_id: randomUUID(), timestamp: new Date().toISOString(), sensor_a: { distance_mm: 314, status: 'ok' }, sensor_b: { distance_mm: null, status: 'timeout' } };
+  const recordId = randomUUID(), point = { reading_id: randomUUID(), timestamp: new Date().toISOString(), sensor: { distance_mm: 314, status: 'ok' } };
   const record = { record_id: recordId, fixture_id: 'sink', data_source: 'sensor', measurements: [point] };
   const options = { apiRecord: record, dbRecord: structuredClone(record), frontendRecord: structuredClone(record), fixture: 'sink', recordId, previousIds: new Set() };
   assert.deepEqual(verifyStoredPoint(options), point);
   assert.equal(verifyStoredPoint({ ...options, previousIds: new Set([point.reading_id]) }), null);
   assert.throws(() => verifyStoredPoint({ ...options, dbRecord: { ...record, data_source: 'simulation' } }));
-  const changed = structuredClone(record); changed.measurements[0].sensor_a.distance_mm = 999;
+  const changed = structuredClone(record); changed.measurements[0].sensor.distance_mm = 999;
   assert.throws(() => verifyStoredPoint({ ...options, frontendRecord: changed }), /does not match/);
 });

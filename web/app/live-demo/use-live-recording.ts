@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DrainApi, DrainApiError } from '../../lib/api';
 import type { DataSource, RecordSummary, RecordView } from '../../lib/api';
+import { selectDeviceRecord, mergeLiveView } from '../../lib/chart-data';
 import { useSession } from '../../lib/supabase';
 
 export function useLiveRecording(initialFixture = '', initialRecord = '', initialSource: DataSource = 'sensor') {
   const session = useSession();
-  const [token, setToken] = useState('');
-  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || token), [session?.access_token, token]);
+  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || ''), [session?.access_token]);
   const [source, setSource] = useState<DataSource>(initialSource);
   const [devices, setDevices] = useState<{ device_id: string; name: string }[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
@@ -29,15 +29,23 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setRecords([]); setDevices([]); setView(null); setError(''); setNeedsAuth(false);
-    void Promise.allSettled([api.devices(controller.signal), api.recordSummaries(source, controller.signal)]).then(([registry, summaries]) => {
-      if (controller.signal.aborted) return;
-      if (summaries.status === 'rejected') throw summaries.reason;
-      // Names are optional metadata; a registry outage must not hide accessible recordings.
-      setDevices(registry.status === 'fulfilled' ? registry.value.devices : []);
-      setRecords(summaries.value.records);
-    }).catch(err => { if (!controller.signal.aborted) reportError(err); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+    let timer: ReturnType<typeof setTimeout>;
+    async function loadSummaries() {
+      if(document.hidden){timer=setTimeout(()=>void loadSummaries(),1000);return;}
+      try {
+        const [registry, summaries] = await Promise.allSettled([api.devices(controller.signal), api.recordSummaries(source, controller.signal)]);
+        if (controller.signal.aborted) return;
+        if (summaries.status === 'rejected') throw summaries.reason;
+        // Names are optional metadata; a registry outage must not hide recordings.
+        setDevices(registry.status === 'fulfilled' ? registry.value.devices : []);
+        setRecords(summaries.value.records);
+      } catch (err) { if (!controller.signal.aborted) reportError(err); }
+      finally {
+        if (!controller.signal.aborted) { setLoading(false); timer = setTimeout(() => void loadSummaries(), 60000); }
+      }
+    }
+    void loadSummaries();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [api, source, refresh]);
 
   const fixtures = useMemo(() => {
@@ -47,25 +55,24 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   }, [devices, records]);
   const fixture = fixtures.some(f => f.id === fixtureChoice) ? fixtureChoice : records[0]?.fixture_id || fixtures[0]?.id || '';
   const fixtureRecords = useMemo(() => records.filter(r => r.fixture_id === fixture), [records, fixture]);
-  const recordId = fixtureRecords.some(r => r.record_id === recordChoice) ? recordChoice
-    : fixtureRecords.find(r => r.record_type === 'drainage' && r.recording_status === 'recording')?.record_id
-      || fixtureRecords.find(r => r.record_type === 'drainage' && r.result?.outcome === 'completed')?.record_id
-      || fixtureRecords.find(r => r.record_type === 'drainage')?.record_id || fixtureRecords[0]?.record_id || '';
+  const recordId = selectDeviceRecord(fixtureRecords, recordChoice);
 
   useEffect(() => {
     if (!recordId) { setView(null); setLoadingRecord(false); return; }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     setView(null); setLoadingRecord(true);
+    let previousView:RecordView|null=null;
     async function load() {
+      if(document.hidden){timer=setTimeout(()=>void load(),1000);return;}
       try {
-        const next = await api.record(recordId, null, controller.signal);
+        const next = await api.record(recordId, null, controller.signal, 120, previousView?.record.measurements.at(-1)?.reading_id);
         if (controller.signal.aborted) return;
-        setView(next); setError(''); setNeedsAuth(false); setLoadingRecord(false);
+        previousView=mergeLiveView(previousView,next);setView(previousView); setError(''); setNeedsAuth(false); setLoadingRecord(false);
         setRecords(previous => previous.map(record => record.record_id === recordId
-          ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.record.measurements.length, calibration: next.record.calibration, drain_status: next.computed.drain_status }
+          ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.computed.sample_count, calibration: next.record.calibration, drain_status: next.computed.drain_status,drain_cycles:next.computed.drain_cycles }
           : record));
-        if (next.record.recording_status === 'recording') timer = setTimeout(() => void load(), 750);
+        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), idle?15000:3000);}
       } catch (err) {
         if (!controller.signal.aborted) {
           setView(null); setLoadingRecord(false); reportError(err);
@@ -79,5 +86,5 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
 
   return { source, setSource, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
     records: fixtureRecords, recordId, setRecordId: setRecordChoice, view, error, needsAuth,
-    loading: loading || loadingRecord, setToken, refresh: () => setRefresh(n => n + 1) };
+    loading: loading || loadingRecord, refresh: () => setRefresh(n => n + 1) };
 }

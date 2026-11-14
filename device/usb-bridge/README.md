@@ -4,7 +4,7 @@
 
 The installed Connect Arduino-Supabase library is not needed for this path.
 Its individual-column insert/update interface does not implement this project's
-paired measurements, nested recording array, retry contract or backend analysis.
+single-sensor measurements, nested recording array, retry contract or backend analysis.
 No schema migration, browser access-rule change, or Supabase key on the board is needed.
 
 ## First run
@@ -66,8 +66,7 @@ validates the response with the same backend validator, and posts:
 {
   "reading_id": "1c3b45dd-0994-44ac-a48f-4dd8bc781a53",
   "timestamp": "2026-11-03T12:00:00.000Z",
-  "sensor_a": { "distance_mm": 313, "status": "ok" },
-  "sensor_b": { "distance_mm": null, "status": "timeout" }
+  "sensor": { "distance_mm": 313, "status": "ok" }
 }
 ```
 
@@ -83,17 +82,10 @@ Distances are separate numeric millimeters; valid range is 20-4500. Missing echo
 are `null`/`timeout`, complete invalid readings are `null`/`out_of_range`.
 There is no smoothing, cross-sensor averaging or fabricated replacement distance.
 
-## One sensor now, two later
+## One sensor
 
-Default `SECOND_SENSOR_ENABLED = false` reports B as `null`/`timeout`.
-This uses the schema's existing unavailable-reading representation; it does not
-claim a second sensor is physically attached. Monitoring can test transport with
-one sensor, or preserve honest failures while the hardware is being debugged.
-Calibration and drainage confirmation need **both** valid sensors.
+The firmware sends only the connected US-100 on D1 (Trig/TX) and D0 (Echo/RX), plus shared 3V3/GND. There is no second-sensor placeholder or enable flag. A missing echo from this sensor is retained as null/timeout. The same one sensor supports calibration, drainage and monitoring.
 
-For a second sensor, wire its Trig to **D3**, Echo to **D2**, and share 3V3/GND.
-Set `SECOND_SENSOR_ENABLED = true` and re-upload. Both sensors use the same selected
-mode. They are measured sequentially; verify acoustic separation on the bench.
 Finish the monitoring record on the website before starting calibration:
 
 ```bash
@@ -150,3 +142,17 @@ cover key permissions, invalid replies, null failures and durable restart recove
 On macOS, a pseudo-terminal test also runs the actual uploader against fragmented
 device replies and verifies clean shutdown. That emulates USB transport; it does
 not establish physical US-100 accuracy or electrical compatibility.
+
+## Automatic guided setup
+
+Configure `API_BASE_URL` and the fixture's `SENSOR_KEY` in `.env`, then run:
+
+```sh
+npm run device:upload -- --follow
+```
+
+Keep this running while using `/add-unit` or `/add-unit?fixture=YOUR_FIXTURE_ID`. No `SENSOR_RECORD_ID` changes are needed in this mode: the backend exposes only the active physical recording ID/type to that fixture's sensor key, and the uploader waits between completed steps. Readings stay bound to the recording selected when acquired; pending uploads retain their original recording ID. The existing fixed-record mode and durable outbox remain available.
+
+In automatic mode, an owner may end a step while its last USB reading is in flight. If the backend explicitly returns `record_finished`, that reading remains in the local outbox with `rejected_reason=record_finished`; it is neither marked saved nor uploaded to the next step. The uploader continues following the device's active recording. Other rejection types still stop acquisition, and uncertain/network responses are retried normally. Fixed-record mode retains its existing stop-on-finished behavior.
+
+Current single-sensor setup: apply `supabase/migrations/202611120001_single_sensor.sql`, use the matching one-sensor firmware, and save a fresh empty-sink reference. See the root README for upgrade preservation and traffic reductions.

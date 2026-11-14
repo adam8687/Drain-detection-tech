@@ -1,0 +1,35 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="720" height="72" viewBox="0 0 720 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Roof and water tank illustration" clip-path="url(#clip0_0_74)">
+<g id="Vector" filter="url(#filter0_d_0_74)">
+<path d="M0 72L28 32H692L720 72H0Z" fill="#6BAAE0"/>
+</g>
+<g id="Vector_2" filter="url(#filter1_d_0_74)">
+<path d="M598 4H546C542.686 4 540 6.68629 540 10V26C540 29.3137 542.686 32 546 32H598C601.314 32 604 29.3137 604 26V10C604 6.68629 601.314 4 598 4Z" fill="#17407F"/>
+</g>
+<path id="Vector_3" d="M556 32V38M588 32V38" stroke-width="3" stroke="#2563AE"/>
+<path id="Vector_4" d="M120 32V18M120 18V10M120 18H108M120 18H132" stroke-width="3" stroke-linecap="round" stroke="#2563AE"/>
+</g>
+<defs>
+<filter id="filter0_d_0_74" x="-3" y="32" width="726" height="46" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="3"/>
+<feGaussianBlur stdDeviation="1.5"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.3 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_74"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_74" result="shape"/>
+</filter>
+<filter id="filter1_d_0_74" x="537" y="4" width="70" height="34" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="3"/>
+<feGaussianBlur stdDeviation="1.5"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.2 0 0 0 0 0.42 0 0 0 0.3 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_74"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_74" result="shape"/>
+</filter>
+<clipPath id="clip0_0_74">
+<rect width="720" height="72" fill="white"/>
+</clipPath>
+</defs>
+</svg>

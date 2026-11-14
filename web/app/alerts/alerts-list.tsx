@@ -44,18 +44,17 @@ function AlertCard({ alert, acknowledged, onToggle, now }: { alert: DrainAlert; 
 export default function AlertsList() {
   const session = useSession();
   const [fixture, setFixture] = useState('');
-  const [source, setSource] = useState<DataSource>('simulation');
+  const [source, setSource] = useState<DataSource>('sensor');
   const [severity, setSeverity] = useState<AlertSeverity | ''>('');
   const [showAcknowledged, setShowAcknowledged] = useState(false);
   const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set());
-  const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
   const [needsToken, setNeedsToken] = useState(false);
   const [data, setData] = useState<AlertList | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || token), [token, session?.access_token]);
+  const api = useMemo(() => new DrainApi('/api/backend', session?.access_token || ''), [session?.access_token]);
 
   useEffect(() => {
     setAcknowledged(loadAcknowledged());
@@ -102,17 +101,17 @@ export default function AlertsList() {
   return <main className={styles.shell}>
     <a href="/dashboard">← Back to dashboard</a>
     <h1>Alerts</h1>
-    <p className={styles.intro}>Drains are compared with each fixture&apos;s own baseline from its first three completed drains. Alerts refresh every 30 seconds.</p>
+    <p className={styles.intro}>The empty-sink reference detects water. Time limits flag standing water while usual drain times are learned during normal use. Alerts refresh every 30 seconds.</p>
     <div id="account" tabIndex={-1}><AccountPanel /></div>
 
     <div className={styles.controls}>
       <label>Fixture <input placeholder="All fixtures" value={fixture} onChange={e => setFixture(e.target.value)} /></label>
-      <label>Data <select value={source} onChange={e => setSource(e.target.value as DataSource)}><option value="simulation">Simulation</option><option value="sensor">Physical sensors</option></select></label>
+      <label>Data <select aria-label="Data" value={source} onChange={e => setSource(e.target.value as DataSource)}><option value="simulation">Simulation</option><option value="sensor">Physical sensors</option></select></label>
       <label><input type="checkbox" checked={showAcknowledged} onChange={e => setShowAcknowledged(e.target.checked)} />Show acknowledged</label>
       <button type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
     </div>
 
-    {needsToken && <form className={styles.controls} onSubmit={e => { e.preventDefault(); setToken(draftToken); }}><label>Backend token <input type="password" autoComplete="off" value={draftToken} onChange={e => setDraftToken(e.target.value)} /></label><button>Connect</button></form>}
+    {needsToken && <a href="/login">Sign in to view your alerts</a>}
     {error && <p role="alert" className={styles.error}>{error}</p>}
 
     {data && <div className={styles.summary} role="group" aria-label="Filter by severity">
@@ -123,8 +122,8 @@ export default function AlertsList() {
     </div>}
 
     {data && visible.length === 0 && <div className={styles.empty}>
-      <h2>{all.length ? 'Nothing left to review' : 'All drains look normal'}</h2>
-      <p>{all.length ? 'Every alert matching this filter has been acknowledged.' : 'No slow drains, stalled sensors or failed readings were found. Fixtures need three completed drains before slow-drain alerts can appear.'}</p>
+      <h2>{all.length ? 'Nothing left to review' : 'No alerts to show'}</h2>
+      <p>{all.length ? 'Every alert matching this filter has been acknowledged.' : 'No alerts were found for this selection. Save the empty-sink reference and keep the device connected to monitor for standing water.'}</p>
     </div>}
 
     {visible.length > 0 && <ul className={styles.list} aria-live="polite">

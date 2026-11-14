@@ -25,7 +25,7 @@ All commands run from the repository root.
 | Sensor A | Trig/TX **D1**, Echo/RX **D0** |
 | Optional sensor B | Trig/TX **D3**, Echo/RX **D2** |
 
-Both sensors use 3V3/GND. Disconnect power while wiring. Default is one sensor in
+The sensor use 3V3/GND. Disconnect power while wiring. Default is one sensor in
 trigger/echo mode, rear jumper **removed**. Missing B uploads null/timeout.
 Calibration/drainage need two working sensors. The ESP never uses localhost or
 the website port. The launcher refuses occupied ports instead of switching them.
@@ -88,14 +88,14 @@ are saved privately in ignored **device/wifi/data/state.json**; do not share it.
 ## Calibration and drainage
 
 1. Stop the board; `npm run wifi:finish` to finish monitoring.
-2. Wire B, set SECOND_SENSOR_ENABLED=true in device/wifi/.env, mount both sensors.
+2. Mount the single US-100 on D1 (Trig/TX) and D0 (Echo/RX).
    Their rear jumpers must match USE_UART. Empty the fixture and turn off the tap.
 3. `npm run wifi:prepare -- friend-sink calibration --confirm-empty`, then Upload.
-   Wait for stable paired evidence and the board's Recording finished message.
+   Wait for stable single-sensor evidence and the board's Recording finished message.
 4. Fill with drain closed, turn off tap. Run
    `npm run wifi:prepare -- friend-sink drainage`, then Upload. When readings are
    saving with water still present, release the drain and watch the dashboard.
-5. Backend saves drain time when both sensors confirm empty. Prepare a new
+5. Backend saves drain time when the sensor confirm empty. Prepare a new
    drainage recording for each test. Successful calibration is reused.
 
 The sketch stores one pending point and pauses sampling offline; it does not
@@ -103,3 +103,5 @@ collect continuously offline. Gaps can make timing uncertain. Per-sample flash
 writes are for bench testing; long-term use needs an endurance/buffering design.
 Automated checks/compilation do not establish physical accuracy or ESP reachability.
 See [firmware recovery details](../us100_wifi_upload/README.md).
+
+Current single-sensor setup: apply `supabase/migrations/202611120001_single_sensor.sql`, use the matching one-sensor firmware, and save a fresh empty-sink reference. See the root README for upgrade preservation and traffic reductions.
