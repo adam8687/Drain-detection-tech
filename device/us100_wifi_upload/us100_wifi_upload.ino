@@ -34,9 +34,9 @@ String pendingUrl, pendingBody;
 bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
 uint32_t lastAttempt = 0, lastSample = 0;
-// Readings are journaled one by one, then uploaded together (server limit: 20).
-constexpr int BATCH_SIZE = 4;       // bound collection delay to two seconds before a slow TLS upload
-constexpr int FAST_BATCH_SIZE = 2;   // used while the HTTPS connection is being reused
+// Readings are journaled one by one, then uploaded together (server limit: 20 per upload).
+// 10 readings x 0.5 s = one upload about every 5 s, which keeps the number of requests low.
+constexpr int BATCH_SIZE = 10;
 uint32_t lastPostMs = 100000;
 // Kept for the life of the sketch so the TLS connection can be reused (keep-alive).
 WiFiClient plainClient; WiFiClientSecure secureClient; HTTPClient http;
@@ -241,7 +241,7 @@ void loop() {
     }
     batchCount++;
     if (!journalPoint(point, firstOfBatch)) { stop("Could not persist the point; upload stopped."); return; }
-    if (batchCount < (lastPostMs < 2000 ? FAST_BATCH_SIZE : BATCH_SIZE)) return;
+    if (batchCount < BATCH_SIZE) return;
     batchReady = true;
   }
   const uint32_t elapsed = millis() - lastAttempt;

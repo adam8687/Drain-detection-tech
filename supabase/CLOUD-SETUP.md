@@ -169,7 +169,7 @@ each completed drain is also saved once as a small row (about 100 bytes), and `G
 time bucket). No screen uses it yet; a chart for it should be added only as the design specifies. Drains finished before this migration are not backfilled.
 
 Known limits: the board makes one HTTPS
-request every 2 s (about 1.3 million function invocations per unit per month).
+upload of 10 readings every ~5 s (about 520,000 function invocations per unit per month). The board still takes a reading every 0.5 s; the server counts a reading as current for 12 s so the live view and checks tolerate the batch interval. Lower `BATCH_SIZE` in the sketch for a faster live view (the server accepts up to 20 readings per upload).
 
 ## Checks
 
