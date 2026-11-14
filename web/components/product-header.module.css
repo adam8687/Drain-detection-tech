@@ -1,5 +1,6 @@
 .header { position: relative; z-index: 10; display: flex; align-items: center; gap: 24px; height: 72px; padding: 0 32px; background: var(--color-surface); box-shadow: var(--shadow-paper); color: var(--foreground); font-size: 14px; }
 .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; font-size: 20px; font-weight: 800; white-space: nowrap; }
+.logo { height: 44px; width: auto; }
 .brand img,.avatar img { display: block; flex-shrink: 0; }
 .navigation { display: flex; align-items: center; gap: 24px; }
 .navigation a { padding: 8px 14px; border-radius: 30px; white-space: nowrap; font-weight: 600; }
@@ -13,4 +14,4 @@
 .header a:focus-visible,.header input:focus-visible { outline: 3px solid var(--color-primary); outline-offset: 4px; }
 @media(max-width:1100px) { .header { gap: 16px; padding: 0 24px; } .navigation { gap: 4px; } .navigation a { padding-inline: 8px; } .search { width: 210px; } }
 @media(max-width:900px) { .navigation,.search,.avatar,.login { display: none; } .header { justify-content: space-between; } .brand { margin-right: auto; } }
-@media(max-width:640px) { .header { padding: 0 16px; gap: 12px; } .brand { font-size: 18px; gap: 8px; } .add,.header > .primary { display: none; } }
+@media(max-width:640px) { .header { padding: 0 16px; gap: 12px; } .logo { height: 36px; } .brand { font-size: 18px; gap: 8px; } .add,.header > .primary { display: none; } }
