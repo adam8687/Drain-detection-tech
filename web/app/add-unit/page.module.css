@@ -90,7 +90,7 @@
 
 .enrollment { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 20px; text-align: center; border-radius: 16px; background: #cfe6f6; }
 .enrollment p { color: var(--muted); font-size: 13px; max-width: 320px; }
-.scanRing { width: 132px; height: 132px; border-radius: 50%; padding: 8px; background: conic-gradient(#2563ae var(--progress), #efe7d6 0); transition: background 0.3s; }
+.scanRing { width: 132px; height: 132px; border-radius: 50%; padding: 8px; background: conic-gradient(#2563ae var(--progress), #efe7d6 0); transition: --progress var(--motion-data) var(--ease-out); }
 .scanRing span { display: grid; place-items: center; height: 100%; border-radius: 50%; background: var(--color-surface); font-size: 30px; font-weight: 600; color: #2563ae; }
 
 /* Touch controls remain usable on compact phones and when text is enlarged. */
@@ -141,5 +141,11 @@
 @media(max-width:640px) { .layout { padding:24px 16px; min-height:calc(100svh - 72px); align-items:start; } .panel { padding:24px 20px; border-radius:24px; } .form h1 { font-size:28px; line-height:36px; } .methods { grid-template-columns:1fr; } .field input { font-size:16px; } .stepper li { font-size:11px; } }
 
 .calloutPhone { left:260px; max-width:240px; white-space:normal; }
+
+.stepper i { transition:background-color var(--motion-layout) var(--ease-out); }
+.panel > .form { animation:step-in var(--motion-layout) var(--ease-out); }
+.scanRing span,.summary dd,.drains strong { font-variant-numeric:tabular-nums; }
+.methods label:hover:not(.selected) { background:var(--color-surface); }
+@keyframes step-in { from { opacity:0; transform:translateX(8px); } }
 
 .instructions { padding-left:22px; display:flex; flex-direction:column; gap:10px; font-size:14px; line-height:1.5; }
