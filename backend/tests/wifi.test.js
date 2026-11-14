@@ -93,3 +93,41 @@ test('watch requires a new sensor point and exact cloud/frontend readback', () =
   const changed = structuredClone(record); changed.measurements[0].sensor.distance_mm = 999;
   assert.throws(() => verifyStoredPoint({ ...options, frontendRecord: changed }), /does not match/);
 });
+
+test('a saved recording that no longer exists is not an error, but other failures are', async () => {
+  const { findPreviousRecording } = await import('../../device/wifi/testing.js');
+  const failing = status => async () => { throw Object.assign(Error(`API ${status}: x`), { status }); };
+  assert.equal(await findPreviousRecording(failing(404), 'https://x', 't', randomUUID()), null);
+  await assert.rejects(findPreviousRecording(failing(401), 'https://x', 't', randomUUID()), /401/);
+  await assert.rejects(findPreviousRecording(failing(503), 'https://x', 't', randomUUID()), /503/);
+  const id = randomUUID();
+  assert.deepEqual(await findPreviousRecording(async (b, t, path) => ({ record: { record_id: id, path } }), 'https://x', 't', id), { record_id: id, path: `/records/${id}` });
+  // The shared API helper now reports the status code so callers can tell not-found from an outage.
+  const error = await api('https://x', 't', '/records/none', undefined, async () => new Response(JSON.stringify({ error: { message: 'Record not found' } }), { status: 404 })).catch(e => e);
+  assert.equal(error.status, 404);
+  assert.match(error.message, /API 404: Record not found/);
+});
+
+test('an installer can link a provisioned unit to a customer account by e-mail, once', async () => {
+  const { findAuthUser, grantOwner } = await import('../../device/wifi/testing.js');
+  const users = Array.from({ length: 230 }, (_, i) => ({ id: randomUUID(), email: `person${i}@example.com` }));
+  const seen = [];
+  const fetcher = async (url, init) => {
+    seen.push({ url, init });
+    const page = Number(new URL(url).searchParams.get('page'));
+    return new Response(JSON.stringify({ users: users.slice((page - 1) * 200, page * 200) }), { status: 200 });
+  };
+  const found = await findAuthUser(' PERSON215@Example.com ', { supabaseUrl: 'https://p.supabase.co', key: 'sb_secret_test', fetcher });
+  assert.equal(found.id, users[215].id);
+  assert.equal(seen.length, 2, 'looks through the second page');
+  assert.equal(seen[0].init.headers.apikey, 'sb_secret_test');
+  assert.equal('Authorization' in seen[0].init.headers, false, 'new-style secret keys are sent as apikey only');
+  assert.equal(await findAuthUser('nobody@example.com', { supabaseUrl: 'https://p.supabase.co', key: 'sb_secret_test', fetcher }), null);
+  await assert.rejects(findAuthUser('not-an-email', { supabaseUrl: 'https://p.supabase.co', key: 'k', fetcher }), /name@example.com/);
+  await assert.rejects(findAuthUser('a@b.co', { supabaseUrl: 'https://p.supabase.co', key: 'k', fetcher: async () => new Response('{}', { status: 401 }) }), /Cannot look up/);
+  const rows = [];
+  const store = { list: async (table, filters) => rows.filter(r => r.device_id === filters.device_id), insert: async (table, row) => { assert.equal(table, 'device_members'); rows.push(row); return row; } };
+  assert.equal(await grantOwner(store, 'DR-1', found.id, new Date('2026-11-14T00:00:00Z')), true);
+  assert.equal(await grantOwner(store, 'DR-1', found.id), false, 'already an owner');
+  assert.deepEqual({ ...rows[0], id: 'x' }, { id: 'x', device_id: 'DR-1', user_id: found.id, role: 'owner', created_at: '2026-11-14T00:00:00.000Z' });
+});

@@ -88,7 +88,7 @@ export default function AddUnitFlow() {
     else setError('The empty readings were not stable yet. Keep the sink empty and the sensor still, then try again.');
   },[recording.view]);
   async function addUnit(event:FormEvent){event.preventDefault();await run(async()=>{
-    try{await api.register(unit,location);}catch(err){if(!(err instanceof DrainApiError&&err.status===409))throw err;const owned=(await api.devices()).devices.some(d=>d.device_id===unit);setExisting(owned);throw Error(owned?'This unit is already yours. Resume its saved setup below.':'That unit belongs to another account. Check the ID printed on it.');}
+    try{await api.register(unit,location);}catch(err){if(!(err instanceof DrainApiError&&err.status===409))throw err;const owned=(await api.devices()).devices.some(d=>d.device_id===unit);setExisting(owned);throw Error(owned?'This unit is already yours. Resume its saved setup below.':'That unit is already registered to another account, or your installer set it up for you. Check the ID printed on it, or ask your installer to link it to your account.');}
     window.history.replaceState(null,'',`/add-unit?fixture=${encodeURIComponent(unit)}`);
     setStep('connect');
   },'Could not add the unit.');}

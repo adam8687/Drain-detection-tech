@@ -1,4 +1,5 @@
 import { networkInterfaces } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 export const accessMigration = 'supabase/migrations/202610270002_records_access.sql';
@@ -54,8 +55,34 @@ export async function api(base, token, path, body, fetcher = fetch) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000) }); }
   catch { throw Error(`Cannot reach ${base}. Start npm run wifi:start and check its displayed ports.`); }
   const value = await response.json();
-  if (!response.ok) throw Error(`API ${response.status}: ${value.error?.message || 'request failed'}`);
+  if (!response.ok) throw Object.assign(Error(`API ${response.status}: ${value.error?.message || 'request failed'}`), { status: response.status });
   return value;
+}
+// A recording saved before a migration or cleanup may no longer exist. That is not a failure: the caller starts a new one.
+export async function findPreviousRecording(request, base, token, recordId) {
+  try { return (await request(base, token, `/records/${recordId}`)).record; }
+  catch (error) { if (error.status === 404) return null; throw error; }
+}
+// Installer-provisioned units are registered without an owner. These two let the installer link one to a customer's account.
+export async function findAuthUser(email, { supabaseUrl, key, fetcher = fetch }) {
+  const wanted = String(email).trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(wanted)) throw Error('Enter the account e-mail as name@example.com.');
+  for (let page = 1; page <= 25; page++) {
+    const response = await fetcher(`${supabaseUrl}/auth/v1/admin/users?page=${page}&per_page=200`, { signal: AbortSignal.timeout(10000),
+      headers: { apikey: key, ...(key.startsWith('eyJ') ? { Authorization: `Bearer ${key}` } : {}) } });
+    if (!response.ok) throw Error('Cannot look up that account. Check the Supabase server key in backend/.env.');
+    const { users = [] } = await response.json();
+    const match = users.find(user => user.email?.toLowerCase() === wanted);
+    if (match) return match;
+    if (users.length < 200) return null;
+  }
+  return null;
+}
+export async function grantOwner(accessStore, fixture, userId, now = new Date()) {
+  const members = await accessStore.list('device_members', { device_id: fixture }, 100);
+  if (members.some(member => member.user_id === userId)) return false;
+  await accessStore.insert('device_members', { id: randomUUID(), device_id: fixture, user_id: userId, role: 'owner', created_at: now.toISOString() });
+  return true;
 }
 export async function checkTables(config, fetcher = fetch) {
   if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(config.supabaseUrl) || !config.supabaseKey?.startsWith('sb_secret_')) throw Error('Configure backend/.env with your own Supabase URL and server secret.');
