@@ -1,12 +1,13 @@
 import {publicSensorRecord} from './single-sensor-migration.js';
 import { ApiError } from './validation.js';
+import { INGEST, ordered } from './records-domain.js';
 const filtersAllowed = new Set(['fixture_id', 'record_type', 'data_source', 'recording_status', 'calibration_present','schema_version']);
 const unavailable = () => new ApiError(503, 'storage_unavailable', 'Storage unavailable. Apply the single-sensor SQL migration (202611120001_single_sensor.sql) and check database access.');
 const conflict = () => new ApiError(409, 'record_conflict', 'Record ID already exists or a recording is already active for this fixture and source.');
 const normalize = row => row ? publicSensorRecord({ ...row, created_at: new Date(row.created_at).toISOString() }) : null;
 const filterEntries = filters => Object.entries(filters).map(([key, value]) => { if (!filtersAllowed.has(key)) throw Error('Unsupported filter'); return [key, value]; });
 export class SupabaseRecordStore {
-  constructor(url, key, fetcher = fetch) { this.url = url; this.key = key; this.fetcher = fetcher; this.cache = new Map(); this.cacheBytes = 0; }
+  constructor(url, key, fetcher = fetch) { this.url = url; this.key = key; this.fetcher = fetcher; this.cache = new Map(); this.cacheBytes = 0; this.deltaOffUntil = 0; }
   async request(path, options = {}, metadata = false, optional = false) {
     let response;
     try { response = await this.fetcher(`${this.url}/rest/v1/${path}`, { ...options, cache: 'no-store', signal: AbortSignal.timeout(10000), headers: { apikey: this.key, ...(this.key.startsWith('eyJ') ? { Authorization: `Bearer ${this.key}` } : {}), 'Content-Type': 'application/json', Prefer: 'return=representation', ...options.headers } }); }
@@ -39,9 +40,38 @@ export class SupabaseRecordStore {
     }
     return structuredClone(row);
   }
+  keep(recordId, revision, row) {
+    const old = this.cache.get(recordId);
+    if (old) { this.cacheBytes -= old.bytes; this.cache.delete(recordId); }
+    const bytes = JSON.stringify(row).length * 2;
+    if (bytes <= 16 * 1024 * 1024) {
+      this.cache.set(recordId, { revision, row, bytes }); this.cacheBytes += bytes;
+      while (this.cacheBytes > 16 * 1024 * 1024 || this.cache.size > 128) { const key = this.cache.keys().next().value; this.cacheBytes -= this.cache.get(key).bytes; this.cache.delete(key); }
+    }
+  }
+  // Fetch only readings newer than the cached copy. The merged result must match the database's own reading count;
+  // anything else (older readings arriving late, a trimmed window, a missing function) takes the full read instead.
+  async delta(header, cached) {
+    const last = cached.row.measurements.at(-1)?.timestamp;
+    if (!last || Number(cached.revision) > Number(header.revision) || Date.now() < this.deltaOffUntil) return null;
+    let rows;
+    try { rows = await this.request('rpc/drain_record_delta', { method: 'POST', body: JSON.stringify({ p_record_id: header.record_id, p_after: last }) }); }
+    catch { this.deltaOffUntil = Date.now() + 300000; return null; }
+    const d = rows[0];
+    if (!d || !Array.isArray(d.tail)) return null;
+    const known = new Map(cached.row.measurements.map(p => [p.reading_id, p]));
+    for (const p of d.tail) known.set(p.reading_id, p);
+    let merged = ordered([...known.values()]);
+    if (cached.row.record_type === 'monitoring' && merged.length > INGEST.monitoringWindow) merged = merged.slice(-INGEST.monitoringWindow);
+    if (merged.length !== d.total) return null;
+    const row = { ...cached.row, calibration: d.calibration, result: d.result, recording_status: d.recording_status, measurements: merged };
+    this.keep(header.record_id, d.revision, row);
+    return structuredClone(row);
+  }
   async hydrate(header) {
     const cached = this.cache.get(header.record_id);
     if (cached && header.revision !== undefined && String(cached.revision) === String(header.revision)) return structuredClone(cached.row);
+    if (cached && header.revision !== undefined) { const fresh = await this.delta(header, cached); if (fresh) return fresh; }
     const raw = (await this.request(`drain_records?record_id=eq.${encodeURIComponent(header.record_id)}&select=*&limit=1`))[0];
     return raw ? this.remember(raw) : null;
   }

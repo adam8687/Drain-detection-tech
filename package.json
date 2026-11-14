@@ -32,6 +32,7 @@
     "migrate:records": "npm --prefix backend run migrate:records",
     "auth:setup": "node scripts/auth-setup.mjs",
     "email:retry": "node --env-file-if-exists=supabase/.env.cloud scripts/email-retry.mjs",
-    "egress:estimate": "node scripts/egress-estimate.mjs"
+    "egress:estimate": "node scripts/egress-estimate.mjs",
+    "egress:simulate": "node scripts/egress-simulate.mjs"
   }
 }

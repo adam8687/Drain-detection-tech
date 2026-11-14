@@ -142,6 +142,26 @@ distances. Per-sample flash writes are for bench tests; sustained deployment nee
 verification stays enabled. Reconfigure its CA if the service trust chain changes. Local Node SSE remains
 available; cloud uses the frontend's REST polling.
 
+## Egress and scale
+
+Egress is what the database returns, so it is driven by viewers re-reading recordings, not by the board. Three
+protections keep it small, none needing a reflash:
+
+- **Idle thinning.** While the sink is idle only one reading per 8 s is stored. Every reading is kept during
+  use and for 30 s afterwards, so drain timing and setup are unaffected. Skipped readings are acknowledged
+  normally and cause no database write.
+- **Rolling window.** A monitoring recording keeps its newest 2000 readings instead of stopping at 5000
+  (previously about 42 minutes of continuous sampling), so a unit can run for months.
+- **Incremental reads.** Apply `202611140002_drain_record_delta.sql`. A worker that already has a copy fetches
+  only newer readings and verifies the count, falling back to a full read if anything differs or the function is
+  missing.
+
+Measure it with `HOURS=1 UNITS=1 npm run egress:simulate` (a local model, no network; `NO_DELTA=1` shows the
+cost without incremental reads). One unit with a live view and a fleet dashboard on separate cold workers, per
+hour: about 455 MB before these changes, about 0.7 MB after. Remaining limits: the board still makes one HTTPS
+request every 2 s (about 1.3 million function invocations per unit per month, so watch the invocation quota
+before deploying many units), and a freshly started worker reads each recording in full once.
+
 ## Checks
 
 ```bash
