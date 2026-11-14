@@ -20,7 +20,7 @@ All commands run from the repository root.
 | Browser → website | device/wifi/.env WEB_PORT, default **3000** |
 | Website → API | Script sets BACKEND_URL to the same API port |
 | USB | Arduino IDE upload/diagnostics only; not Wi-Fi data transport |
-| Serial Monitor | **115200 baud** |
+| Serial Monitor | **115200 baud**, only in a `DEBUG_SERIAL` build |
 | US-100 UART, if selected | **9600 baud**, rear jumper installed |
 | Sensor A | Trig/TX **D1**, Echo/RX **D0** |
 
@@ -56,7 +56,8 @@ Your Mac must stay awake with Internet access for this local setup.
 7. Arduino IDE: open **device/us100_wifi_upload/us100_wifi_upload.ino**, select
    **Arduino Nano ESP32**, select its USB port, keep **Partition Scheme → With FAT
    partition (default)**, Upload. No Supabase library needed.
-   Open Serial Monitor at **115200**; wait for Saved measurement in Supabase.
+   The firmware is silent by default. Confirm with `npm run wifi:watch` (step 8). For diagnostics add
+   `#define DEBUG_SERIAL 1` to the sketch and open Serial Monitor at **115200**.
 8. `npm run wifi:watch`. Waits up to 60 seconds for a NEW real sensor point and
    compares it exactly across the API, hosted Supabase and website proxy. It never
    injects sample data. PASS proves transport; check reported A/B statuses and

@@ -12,6 +12,20 @@
 #include <time.h>
 #include "secrets.h"
 
+// Serial output costs time: a USB serial print can block once its buffer fills with nothing reading it, and set-up
+// waits for a monitor to attach. The build is therefore silent and the messages below compile to nothing. For a
+// diagnostic build add `#define DEBUG_SERIAL 1` here, or compile with -DDEBUG_SERIAL=1.
+#ifndef DEBUG_SERIAL
+#define DEBUG_SERIAL 0
+#endif
+#if DEBUG_SERIAL
+#define LOG_LINE(text) Serial.println(text)
+#define LOG_F(...) Serial.printf(__VA_ARGS__)
+#else
+#define LOG_LINE(text) do {} while (0)
+#define LOG_F(...) do {} while (0)
+#endif
+
 // Sensor mode is defined in secrets.h. Wi-Fi setup
 // scripts generate it from device/wifi/.env using the same bench pin mapping.
 HardwareSerial uartA(1);
@@ -37,7 +51,7 @@ struct Reading { int distanceMm; const char* status; };
 
 void stop(const String& reason) {
   stopReason = reason;
-  Serial.println(reason);
+  LOG_LINE(reason);
   stopped = true;
 }
 
@@ -111,7 +125,9 @@ bool journalPoint(const String& point, bool firstOfBatch) {
 }
 
 void setup() {
+#if DEBUG_SERIAL
   Serial.begin(115200); delay(1500);
+#endif
   if (!validId(SENSOR_RECORD_ID) || !String(SENSOR_KEY).startsWith("dk_") || String(SENSOR_KEY).indexOf("PASTE") >= 0) {
     stop("Fill secrets.h with the recording UUID and its fixture sensor key."); return;
   }
@@ -154,14 +170,14 @@ void setup() {
         // Only migrate the endpoint for a verified SAME recording. Keep the old
         // on-disk journal intact until cloud acknowledgement; retries stay exact.
         pendingUrl = expected;
-        Serial.println("Recovering the original pending point to its verified cloud recording.");
+        LOG_LINE("Recovering the original pending point to its verified cloud recording.");
       }
     }
     if (pendingUrl != expected || pendingBody.isEmpty()) {
       stop("Pending point belongs to another destination or is damaged. Restore original configuration; do not erase it."); return;
     }
     batchReady = true;  // a journaled batch is uploaded exactly as saved, never extended
-    Serial.println("Recovering saved point(s) with their original IDs and timestamps.");
+    LOG_LINE("Recovering saved point(s) with their original IDs and timestamps.");
   }
   if (USE_UART) {
     uartA.begin(9600, SERIAL_8N1, D0, D1);
@@ -169,7 +185,7 @@ void setup() {
     pinMode(D1, OUTPUT); digitalWrite(D1, LOW); pinMode(D0, INPUT);
   }
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.println("Connecting to Wi-Fi...");
+  LOG_LINE("Connecting to Wi-Fi...");
 }
 
 void loop() {
@@ -177,13 +193,13 @@ void loop() {
   // later still reveals the problem, without printing credentials or payloads.
   if (stopped) {
     if (uint32_t(millis() - lastStatus) >= 5000) {
-      Serial.println(stopReason); lastStatus = millis();
+      LOG_LINE(stopReason); lastStatus = millis();
     }
     delay(100); return;
   }
   if (WiFi.status() != WL_CONNECTED) {
     if (uint32_t(millis() - lastStatus) >= 5000) {
-      Serial.printf("Waiting for Wi-Fi (status %d); station MAC: %s\n", int(WiFi.status()), WiFi.macAddress().c_str());
+      LOG_F("Waiting for Wi-Fi (status %d); station MAC: %s\n", int(WiFi.status()), WiFi.macAddress().c_str());
       lastStatus = millis();
     }
     delay(500); return;
@@ -196,10 +212,10 @@ void loop() {
       if (now.tv_sec >= 1767225600) break;
       delay(100);
     }
-    if (now.tv_sec < 1767225600) { Serial.println("Waiting for an accurate UTC clock..."); return; }
+    if (now.tv_sec < 1767225600) { LOG_LINE("Waiting for an accurate UTC clock..."); return; }
     epochMs = int64_t(now.tv_sec) * 1000 + now.tv_usec / 1000;
     startUs = esp_timer_get_time();
-    Serial.printf("Wi-Fi and UTC clock ready. ESP IP: %s\n", WiFi.localIP().toString().c_str());
+    LOG_F("Wi-Fi and UTC clock ready. ESP IP: %s\n", WiFi.localIP().toString().c_str());
   }
   if (!batchReady) {
     if (pendingBody.isEmpty() && recoveredRun && !RESUME_AFTER_RESTART) {
@@ -256,10 +272,10 @@ void loop() {
     }
     if (!FFat.remove("/pending.txt")) { stop("Could not clear acknowledged point. Restart to retry safely."); return; }
     pendingBody = ""; pendingUrl = ""; batchCount = 0; batchReady = false;
-    Serial.printf("Saved batch in Supabase. (%u ms, RSSI %d dBm)\n", (unsigned)postMs, WiFi.RSSI());
+    LOG_F("Saved batch in Supabase. (%u ms, RSSI %d dBm)\n", (unsigned)postMs, WiFi.RSSI());
     if (finished) stop("Recording finished. Create the next recording and update SENSOR_RECORD_ID.");
   } else if (code <= 0 || code == 408 || code == 429 || code >= 500) {
-    Serial.printf("Connection/server unavailable (%d) after %u ms, RSSI %d dBm. Retrying saved point; sampling paused.\n", code, (unsigned)postMs, WiFi.RSSI());
+    LOG_F("Connection/server unavailable (%d) after %u ms, RSSI %d dBm. Retrying saved point; sampling paused.\n", code, (unsigned)postMs, WiFi.RSSI());
     delay(2000);
   } else {
     stop(String("Upload stopped (HTTP ") + code + "). Check recording, fixture key and backend. Saved point retained.");

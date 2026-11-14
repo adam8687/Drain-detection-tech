@@ -49,8 +49,8 @@ Private ignored files:
 - web/.env.cloud.local: cloud URL and restricted server-side bench viewer key.
 
 Upload device/us100_wifi_upload/us100_wifi_upload.ino with **Arduino Nano ESP32**,
-**With FAT partition (default)**, existing sensor mode/pins. Serial Monitor is
-115200. No Supabase service key or admin token is placed on the ESP.
+**With FAT partition (default)**, existing sensor mode/pins. The firmware prints nothing by default
+(see below). No Supabase service key or admin token is placed on the ESP.
 
 ## Recover a pending point from the old Mac endpoint
 
@@ -116,9 +116,12 @@ US-100 is not waterproof. Fill only to the app's indicator (at least 40 mm, safe
    to a customer account belongs with sign-in and is not done by this command. If the saved recording in
    `device/wifi/data/state.json` no longer exists, for example after a migration, it creates a new one instead of
    failing.
-3. **Flash.** Arduino IDE, **Arduino Nano ESP32**, **With FAT partition (default)**, Upload, Serial Monitor
-   115200. Wait for "Saved measurement in Supabase". If it stops with "Pending point belongs to another
-   destination or is damaged" or "Upload stopped (HTTP 4xx)" the board holds a reading from older firmware:
+3. **Flash.** Arduino IDE, **Arduino Nano ESP32**, **With FAT partition (default)**, Upload. The
+   firmware is silent by default, because serial output costs time; confirm it with step 4 or the dashboard. For
+   a diagnostic build add `#define DEBUG_SERIAL 1` at the top of the sketch (or compile with
+   `-DDEBUG_SERIAL=1`) and open the Serial Monitor at 115200. If a debug build stops with "Pending point
+   belongs to another destination or is damaged" or "Upload stopped (HTTP 4xx)" the board holds a reading
+   from older firmware:
    set `INITIALIZE_EMPTY_FILESYSTEM=true`, rerun step 2, upload once, then set it back to `false` and rerun
    step 2. Only do this when nothing pending is still needed.
 4. **Verify transport.** `npm run wifi:watch` waits for a new real reading and compares the API, Supabase and

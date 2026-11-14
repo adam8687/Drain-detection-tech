@@ -76,13 +76,14 @@ same fixture. The owner creates recordings; sensor keys can only append readings
    `http://YOUR_MAC_LAN_IP:8000/health` opens on another device on that network.
 5. Select **Arduino Nano ESP32**, its port, then Upload. Keep **Tools → Partition
    Scheme → With FAT partition (default)**. The sketch uses FFat, matching the
-   Nano's default layout. Open Serial Monitor at **115200**.
+   Nano's default layout. The firmware prints nothing by default (serial output costs time); to see
+   diagnostics add `#define DEBUG_SERIAL 1` to the sketch and open Serial Monitor at **115200**.
 6. If it reports uninitialized storage on first use, set
    `INITIALIZE_EMPTY_FILESYSTEM = true`, upload once, then restore it to false
    for subsequent uploads. This explicitly permits formatting an unmountable
    FFat partition; never enable it when there may be an unsaved reading.
 
-Expected messages:
+Expected messages in a `DEBUG_SERIAL` build:
 
 ```text
 Connecting to Wi-Fi...
