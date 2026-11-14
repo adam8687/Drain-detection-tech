@@ -199,6 +199,8 @@ export async function statusContext(store, rows) {
   let cache=contextCache.get(store);if(!cache){cache=new Map();contextCache.set(store,cache);}
   const groups=new Map();for(const row of rows)if(['drainage','monitoring'].includes(row.record_type))groups.set(`${row.fixture_id}\0${row.data_source}`,row);
   const context=await Promise.all([...groups].map(async([key,row])=>{
+    // A saved drainage profile replaces the learned baseline, so skip the history scan (and its reads) entirely.
+    const profiled=await sinkProfile(store,row);if(profiled&&row.calibration?.empty_distance_mm===profiled.empty)return[];
     const hit=cache.get(key);let training=hit&&hit.expires>Date.now()?hit.rows:null;
     if(!training){training=[];for(let offset=0;;offset+=20){const page=await store.list({fixture_id:row.fixture_id,data_source:row.data_source,schema_version:2},20,'asc',offset);training.push(...page);if(learnedBaseline(training).seconds!==null||page.length<20)break;}}
     const combined=[...new Map([...training,...rows.filter(r=>r.fixture_id===row.fixture_id&&r.data_source===row.data_source)].map(r=>[r.record_id,r])).values()];
@@ -384,12 +386,29 @@ export function appendMeasurements(record, points) {
   }
   return { record: current, duplicate };
 }
+// Egress and record-size control for continuous monitoring. A sink that is just sitting there does not need every
+// reading: while idle keep one reading per idleKeepMs. During use, and for quietMs afterwards, keep every reading so
+// drain timing, setup checks and the shifted-level check always see dense data. Monitoring keeps a rolling window
+// instead of refusing readings when full, so a unit can run for months. Skipped readings are acknowledged normally.
+export const INGEST = Object.freeze({ idleBandMm: 8, quietMs: 30000, idleKeepMs: 8000, monitoringWindow: 2000 });
+const rawDepth = (p, c) => p.sensor?.status === 'ok' && p.sensor.distance_mm !== null ? c.empty_distance_mm - p.sensor.distance_mm : null;
+const idleReading = (p, c) => { const d = rawDepth(p, c); return d !== null && Math.abs(d) <= INGEST.idleBandMm; };
+function skipIdle(record, point) {
+  if (record.record_type !== 'monitoring' || !record.calibration || !record.measurements.length || !idleReading(point, record.calibration)) return false;
+  const t = Date.parse(point.timestamp), stored = record.measurements, last = Date.parse(stored.at(-1).timestamp);
+  if (t < last || t - last >= INGEST.idleKeepMs) return false;
+  for (let i = stored.length - 1; i >= 0 && t - Date.parse(stored[i].timestamp) <= INGEST.quietMs; i--) if (!idleReading(stored[i], record.calibration)) return false;
+  return true;
+}
 export function appendMeasurement(record, point) {
   const existing = record.measurements.find(p => p.reading_id === point.reading_id);
   if (existing) { if (!isDeepStrictEqual(existing, point)) fail('reading_id was reused with different measurements', 409, 'reading_conflict'); return { record, duplicate: true }; }
   if (record.recording_status !== 'recording') fail('Recording is finished; start a new record', 409, 'record_finished');
-  if (record.measurements.length >= SETTINGS.maxMeasurements) fail('Recording reached 5000 samples; finish it and start another', 409, 'record_full');
-  const next = { ...record, measurements: ordered([...record.measurements, point]) };
+  if (skipIdle(record, point)) return { record, duplicate: true, thinned: true };
+  if (record.measurements.length >= SETTINGS.maxMeasurements && record.record_type !== 'monitoring') fail('Recording reached 5000 samples; finish it and start another', 409, 'record_full');
+  let measurements = ordered([...record.measurements, point]);
+  if (record.record_type === 'monitoring' && measurements.length > INGEST.monitoringWindow) measurements = measurements.slice(-INGEST.monitoringWindow);
+  const next = { ...record, measurements };
   if (next.record_type === 'calibration') {
     const learned = learnCalibration(next.measurements);
     if (learned.calibration) { next.calibration = learned.calibration; next.recording_status = 'finished'; }
