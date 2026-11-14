@@ -29,7 +29,7 @@ function setup(t) {
     return {status:response.status,body:await response.json()};
   };
   const start = async (type='monitoring',fixture='sink',source='sensor') => (await call('/api/v1/records',ADMIN,{fixture_id:fixture,record_type:type,data_source:source,...(type==='calibration'?{confirm_empty:true}:{})})).body;
-  const point = (ms, a=300,b=a+20) => ({reading_id:randomUUID(),timestamp:new Date(ms).toISOString(),sensor_a:{distance_mm:a,status:'ok'},sensor_b:{distance_mm:b,status:'ok'}});
+  const point = (ms, a=300,b=a+20) => ({reading_id:randomUUID(),timestamp:new Date(ms).toISOString(),sensor:{distance_mm:a,status:'ok'}});
   return {handler,call,start,point,store,accessStore};
 }
 test('cloud rejects anonymous access and short admin tokens; validates JSON, size and CORS',async t=>{
@@ -77,7 +77,7 @@ test('cloud calibrates, computes drainage and replay identically, and freezes co
   for(let i=0;i<20;i++) assert.equal((await call(`/api/v1/records/${calibration.record_id}/measurements`,ADMIN,point(base+i*500,400,420))).status,201);
   const learned=await store.get(calibration.record_id);
   assert.equal(learned.recording_status,'finished');
-  assert.deepEqual(learned.calibration,{sensor_a_empty_mm:400,sensor_b_empty_mm:420});
+  assert.deepEqual(learned.calibration,{empty_distance_mm: 400});
   const drain=await start('drainage');
   for(let i=0;i<24;i++) await call(`/api/v1/records/${drain.record_id}/measurements`,ADMIN,point(base+15000+i*500,Math.min(400,300+i*5),Math.min(420,320+i*5)));
   const saved=await store.get(drain.record_id);
@@ -97,7 +97,7 @@ test('cloud concurrent appends are retry-safe, reject conflicting duplicates and
   const replies=await Promise.all(Array.from({length:6},()=>call(`/api/v1/records/${row.record_id}/measurements`,ADMIN,sample)));
   assert.equal(replies.filter(r=>r.status===201).length,1);
   assert.equal((await store.get(row.record_id)).measurements.length,1);
-  assert.equal((await call(`/api/v1/records/${row.record_id}/measurements`,ADMIN,{...sample,sensor_a:{distance_mm:999,status:'ok'}})).status,409);
+  assert.equal((await call(`/api/v1/records/${row.record_id}/measurements`,ADMIN,{...sample,sensor:{distance_mm:999,status:'ok'}})).status,409);
   const original=store.compareAndSet;store.compareAndSet=async()=>false;
   assert.equal((await call(`/api/v1/records/${row.record_id}/measurements`,ADMIN,point(Date.now()))).status,409);
   store.compareAndSet=async()=>{throw new ApiError(503,'storage_unavailable','Cloud write rejected');};
@@ -109,16 +109,18 @@ test('frontend preserves function URL prefix and injects only a scoped viewer on
   await call('/api/v1/devices',ADMIN,{device_id:'sink',name:'Sink'});
   await start();
   const viewer=(await call('/api/v1/devices/sink/view-key',ADMIN,{})).body.key;
-  const previous={url:process.env.SUPABASE_FUNCTION_URL,viewer:process.env.DRAIN_VIEWER_TOKEN,fetch:globalThis.fetch};
-  process.env.SUPABASE_FUNCTION_URL='https://test.supabase.co/functions/v1/drain-api';process.env.DRAIN_VIEWER_TOKEN=viewer;
+  const previous={url:process.env.SUPABASE_FUNCTION_URL,viewer:process.env.DRAIN_VIEWER_TOKEN,bench:process.env.DRAIN_ENABLE_BENCH_VIEWER,fetch:globalThis.fetch};
+  process.env.SUPABASE_FUNCTION_URL='https://test.supabase.co/functions/v1/drain-api';process.env.DRAIN_VIEWER_TOKEN=viewer;process.env.DRAIN_ENABLE_BENCH_VIEWER='true';
   t.after(()=>{
     if(previous.url===undefined)delete process.env.SUPABASE_FUNCTION_URL;else process.env.SUPABASE_FUNCTION_URL=previous.url;
     if(previous.viewer===undefined)delete process.env.DRAIN_VIEWER_TOKEN;else process.env.DRAIN_VIEWER_TOKEN=previous.viewer;
+    if(previous.bench===undefined)delete process.env.DRAIN_ENABLE_BENCH_VIEWER;else process.env.DRAIN_ENABLE_BENCH_VIEWER=previous.bench;
     globalThis.fetch=previous.fetch;
   });
   let target;
   globalThis.fetch=async(url,options)=>{target=String(url);return handler(new Request(url,options));};
   const context={params:Promise.resolve({path:['api','v1','records']})};
+  delete process.env.DRAIN_ENABLE_BENCH_VIEWER;const anonymous=await GET(new Request('http://frontend/api/backend/api/v1/records?fixture_id=sink'),context);assert.equal(anonymous.status,401);process.env.DRAIN_ENABLE_BENCH_VIEWER='true';
   const read=await GET(new Request('http://frontend/api/backend/api/v1/records?fixture_id=sink'),context);
   assert.equal(read.status,200);assert.equal((await read.json()).records.length,1);
   assert.ok(target.includes('/functions/v1/drain-api/api/v1/records?fixture_id=sink'));
@@ -140,8 +142,69 @@ test('batched measurements append atomically, retry as duplicates and reject bad
   assert.equal((await call(path,ADMIN,{measurements:Array.from({length:21},(_,i)=>point(base+5000+i))})).status,422);
   const p=point(base+9000);
   assert.equal((await call(path,ADMIN,{measurements:[p,p]})).status,422);
-  assert.equal((await call(path,ADMIN,{measurements:[point(base+9500),{...batch[0],sensor_a:{distance_mm:999,status:'ok'}}]})).status,409);
+  assert.equal((await call(path,ADMIN,{measurements:[point(base+9500),{...batch[0],sensor:{distance_mm:999,status:'ok'}}]})).status,409);
   assert.equal((await store.get(row.record_id)).measurements.length,10,'a failed batch must not partially apply');
   assert.equal((await call(path,ADMIN,point(base+9600))).status,201,'single-point bodies still work');
   assert.equal((await store.get(row.record_id)).measurements.length,11);
+});
+
+test('guided setup calibrates, learns three drains, resumes and reports a live timeout',async t=>{
+  const {call,point}=setup(t);
+  const fixture='guided-sink';
+  assert.equal((await call('/api/v1/devices','alice',{device_id:fixture,name:'Kitchen sink'})).status,201);
+  const key=(await call(`/api/v1/devices/${fixture}/keys`,'alice',{})).body.key;
+  const create=async type => {
+    const response=await call('/api/v1/records','alice',{fixture_id:fixture,data_source:'sensor',record_type:type,...(type==='calibration'?{confirm_empty:true}:{})});
+    assert.equal(response.status,201);return response.body;
+  };
+  const append=async (row,points)=>{
+    let response;
+    for(let i=0;i<points.length;i+=20) {response=await call(`/api/v1/records/${row.record_id}/measurements`,key,{measurements:points.slice(i,i+20)});assert.equal(response.status,201);}
+    return response.body;
+  };
+  const calibration=await create('calibration');
+  const now=Date.now()-300000;
+  await append(calibration,Array.from({length:20},(_,i)=>point(now+i*500)));
+  const durations=[20,21,19];
+  for(let n=0;n<durations.length;n++){
+    const row=await create('drainage'),seconds=durations[n],start=now+20000+n*30000;
+    const points=Array.from({length:seconds+3},(_,i)=>point(start+i*1000,300-(i>=seconds?0:Math.max(10,50*(1-i/seconds)))));
+    const result=await append(row,points);
+    assert.equal(result.result.outcome,'completed');
+    const view=await call(`/api/v1/records/${row.record_id}`,'alice');
+    assert.equal(view.body.computed.drain_status.baseline_count,n+1);
+  }
+  const resumed=await call(`/api/v1/records?fixture_id=${fixture}&data_source=sensor&limit=1`,'alice');
+  assert.equal(resumed.body.records[0].drain_status.baseline_seconds,20);
+  assert.equal(resumed.body.records[0].drain_status.timeout_threshold_seconds,60);
+  const live=await create('drainage');
+  const discovery=await call('/api/v1/sensor/active-record',key);
+  assert.deepEqual(discovery.body.record,{record_id:live.record_id,record_type:'drainage',fixture_id:fixture});
+  assert.equal((await call('/api/v1/sensor/active-record','alice')).status,403);
+  const start=Date.now()-65000;
+  await append(live,Array.from({length:66},(_,i)=>point(start+i*1000,250)));
+  const view=await call(`/api/v1/records/${live.record_id}`,'alice');
+  assert.equal(view.body.computed.drain_status.status,'running_too_long');
+  const alerts=await call(`/api/v1/alerts?fixture_id=${fixture}`,'alice');
+  assert.ok(alerts.body.alerts.some(a=>a.type==='running_too_long'&&a.severity==='critical'));
+  assert.equal((await call(`/api/v1/records/${live.record_id}`,'bob')).status,404);
+});
+
+test('continuous monitoring uses learned baseline and alerts reference the real recording',async t=>{
+  const {call,store}=setup(t), now=Date.now();
+  const calibration={empty_distance_mm: 300};
+  const point=(ms,depth)=>({reading_id:randomUUID(),timestamp:new Date(ms).toISOString(),sensor:{status:'ok',distance_mm:300-depth}});
+  for(let i=0;i<3;i++)await store.insert({record_id:randomUUID(),fixture_id:'continuous',data_source:'sensor',record_type:'drainage',recording_status:'finished',created_at:new Date(now-1000000+i*1000).toISOString(),calibration,measurements:[point(now-1000000+i*1000,50)],result:{outcome:'completed',drainage_time_seconds:20}});
+  const empty=await call('/api/v1/records',ADMIN,{fixture_id:'continuous',data_source:'sensor',record_type:'monitoring'});
+  const waiting=await call(`/api/v1/records/${empty.body.record_id}`);
+  assert.equal(waiting.body.computed.drain_status.baseline_seconds,20);
+  await call(`/api/v1/records/${empty.body.record_id}/finish`,ADMIN,{});
+  const id=randomUUID();
+  await store.insert({record_id:id,fixture_id:'continuous',data_source:'sensor',record_type:'monitoring',recording_status:'recording',created_at:new Date(now-70000).toISOString(),calibration,measurements:Array.from({length:66},(_,i)=>point(now-65000+i*1000,50)),result:null});
+  const view=await call(`/api/v1/records/${id}`);
+  assert.equal(view.body.computed.drain_status.status,'running_too_long');
+  const alerts=await call('/api/v1/alerts?fixture_id=continuous');
+  assert.equal(alerts.body.alerts[0].type,'running_too_long');
+  assert.equal(alerts.body.alerts[0].record_id,id);
+  assert.equal((await store.get(id)).result,null);
 });

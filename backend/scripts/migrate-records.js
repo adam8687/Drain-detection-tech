@@ -8,7 +8,7 @@ import { validateMeasurement } from '../src/records-domain.js';
 
 const stableId = label => { const h = createHash('sha256').update(`legacy-records-v1:${label}`).digest('hex'); return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`; };
 const source = value => value === 'mock' ? 'simulation' : 'sensor';
-const snapshot = calibration => calibration ? { sensor_a_empty_mm: calibration.empty_distance_mm.a, sensor_b_empty_mm: calibration.empty_distance_mm.b } : null;
+const snapshot = calibration => calibration ? { empty_distance_mm: calibration.empty_distance_mm.a } : null;
 export function convertLegacy({ devices, calibrations = [], readings, sessions }) {
   const byId = new Map();
   const addCalibration = cal => { const existing = byId.get(cal.id); if (existing && !isDeepStrictEqual(existing, cal)) throw Error('Conflicting legacy calibration versions; refusing to choose one'); byId.set(cal.id, cal); };
@@ -17,7 +17,7 @@ export function convertLegacy({ devices, calibrations = [], readings, sessions }
     for (const cal of Object.values(fixture.calibration_history || {})) addCalibration(cal);
     for (const cal of Object.values(fixture.calibration || {})) if (cal?.id) addCalibration(cal);
   }
-  const point = frame => validateMeasurement({ reading_id: frame.event_id, timestamp: frame.measured_at, ...Object.fromEntries(distances(frame).map(r => [`sensor_${r.sensor_id}`, { status: r.status, distance_mm: r.distance_mm }])) });
+  const point = frame => validateMeasurement({ reading_id: frame.event_id, timestamp: frame.measured_at, sensor: (()=>{const reading=distances(frame).find(r=>r.sensor_id==='a');if(!reading)throw Error('Legacy channel A is missing');return {status:reading.status,distance_mm:reading.distance_mm};})() });
   const result = [], assigned = new Set();
   for (const cal of byId.values()) {
     for (const data_source of cal.source ? [source(cal.source)] : ['sensor','simulation']) {
@@ -51,7 +51,7 @@ export function convertLegacy({ devices, calibrations = [], readings, sessions }
     }
   }
   for (const fixture of devices) if (!result.some(r => r.fixture_id === fixture.device_id)) result.push({ record_id: stableId(`empty:${fixture.device_id}`), fixture_id: fixture.device_id, record_type: 'monitoring', data_source: 'sensor', recording_status: 'finished', calibration: null, measurements: [], result: null, created_at: fixture.created_at });
-  return result;
+  return result.map(record=>({...record,schema_version:1,recording_status:'finished',result:record.recording_status==='recording'&&record.record_type==='drainage'?{drainage_time_seconds:null,outcome:'uncertain'}:record.result}));
 }
 export async function migrateRecords(store, legacy) {
   const records = convertLegacy(legacy);

@@ -5,11 +5,11 @@ import { validateMeasurement } from '../../backend/src/records-domain.js';
 import { object, uuid } from '../../backend/src/validation.js';
 
 // Serial-only metadata never enters the database contract. Timestamp is the
-// Mac's UTC acquisition-request time, before the board measures either sensor.
+// Mac's UTC acquisition-request time, before the board measures the sensor.
 export function measurementFromReply(line, request) {
   if (line.length > 4096) throw Error('Oversized sensor reply');
   const reply = JSON.parse(line);
-  object(reply, ['reading_id', 'sensor_a', 'sensor_b']);
+  object(reply, ['reading_id', 'sensor']);
   if (uuid(reply.reading_id, 'reading_id') !== request.reading_id) throw Error('Reply does not match the current acquisition request');
   return validateMeasurement({ ...reply, timestamp: request.timestamp });
 }
@@ -25,6 +25,7 @@ export class Outbox {
         reading_id TEXT UNIQUE NOT NULL, record_id TEXT NOT NULL,
         body TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0
       );`);
+    if (!this.db.prepare('PRAGMA table_info(usb_outbox)').all().some(c => c.name === 'rejected_reason')) this.db.exec('ALTER TABLE usb_outbox ADD COLUMN rejected_reason TEXT');
   }
   enqueue(recordId, point) {
     uuid(recordId, 'record_id');
@@ -36,14 +37,16 @@ export class Outbox {
     }
     this.db.prepare('INSERT INTO usb_outbox (reading_id,record_id,body) VALUES (?,?,?)').run(point.reading_id, recordId, body);
   }
-  next() { return this.db.prepare('SELECT * FROM usb_outbox WHERE acknowledged=0 ORDER BY sequence LIMIT 1').get(); }
+  next() { return this.db.prepare('SELECT * FROM usb_outbox WHERE acknowledged=0 AND rejected_reason IS NULL ORDER BY sequence LIMIT 1').get(); }
   acknowledge(id) { this.db.prepare('UPDATE usb_outbox SET acknowledged=1 WHERE reading_id=?').run(id); }
   count(recordId) { return this.db.prepare('SELECT count(*) AS n FROM usb_outbox WHERE record_id=?').get(recordId).n; }
-  pending() { return this.db.prepare('SELECT count(*) AS n FROM usb_outbox WHERE acknowledged=0').get().n; }
+  pending() { return this.db.prepare('SELECT count(*) AS n FROM usb_outbox WHERE acknowledged=0 AND rejected_reason IS NULL').get().n; }
+  reject(id, reason) { this.db.prepare('UPDATE usb_outbox SET rejected_reason=? WHERE reading_id=? AND acknowledged=0').run(reason,id); }
+  rejected() { return this.db.prepare('SELECT count(*) AS n FROM usb_outbox WHERE rejected_reason IS NOT NULL').get().n; }
   close() { this.db.close(); }
 }
 
-export async function uploadNext(outbox, { base, token = '', fetcher = fetch }) {
+export async function uploadNext(outbox, { base, token = '', fetcher = fetch, follow = false }) {
   const item = outbox.next();
   if (!item) return null;
   const response = await fetcher(`${base}/api/v1/records/${item.record_id}/measurements`, {
@@ -51,6 +54,12 @@ export async function uploadNext(outbox, { base, token = '', fetcher = fetch }) 
     body: item.body, signal: AbortSignal.timeout(15000),
   });
   const value = await response.json().catch(() => null);
+  if (follow && response.status === 409 && value?.error?.code === 'record_finished') {
+    // The owner ended this step while a reading was in flight. Keep that exact
+    // reading locally with an explicit rejection; never retarget it or claim it saved.
+    outbox.reject(item.reading_id,'record_finished');
+    return {record_id:item.record_id,recording_status:'finished',rejected:true,point:JSON.parse(item.body)};
+  }
   if (![200, 201].includes(response.status)) {
     const error = Error(`Upload failed (${response.status}): ${value?.error?.message || 'no acknowledgement'}`);
     error.retryable = response.status >= 500 || response.status === 429 || value?.error?.code === 'concurrent_update';

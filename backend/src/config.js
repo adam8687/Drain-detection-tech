@@ -1,5 +1,7 @@
+import {providerConfiguration} from '../../supabase/functions/_shared/email-notifications.js';
 export function configFromEnv(env = process.env) {
   const config = {
+    email:providerConfiguration(env),emailWorkerToken:env.DRAIN_EMAIL_WORKER_TOKEN||'',
     host: env.HOST || '0.0.0.0', port: Number(env.PORT || 8000),
     production: env.NODE_ENV === 'production',
     storage: env.STORAGE_BACKEND || 'supabase',
@@ -9,6 +11,7 @@ export function configFromEnv(env = process.env) {
     origins: (env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173').split(',').map(s => s.trim()).filter(Boolean),
     supabaseUrl: env.SUPABASE_URL || '', supabaseKey: env.SUPABASE_SECRET_KEY || '',
   };
+  if(config.emailWorkerToken&&config.emailWorkerToken.length<32)throw Error('Email worker token must have at least 32 characters');
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) throw Error('Invalid PORT');
   if (!['sqlite', 'supabase'].includes(config.storage)) throw Error('Invalid STORAGE_BACKEND');
   if (config.production && config.storage !== 'supabase') throw Error('Production requires Supabase storage');

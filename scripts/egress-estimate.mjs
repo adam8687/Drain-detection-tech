@@ -1,0 +1,7 @@
+// Pure local response-size model. It does not query Supabase billing or records.
+import{randomUUID}from'node:crypto';import{boundedRecordView}from'../supabase/functions/_shared/records-domain.js';
+const count=5000,start=Date.now()-count*500;
+const measurements=Array.from({length:count},(_,i)=>({reading_id:randomUUID(),timestamp:new Date(start+i*500).toISOString(),sensor:{distance_mm:300,status:'ok'}}));
+const record={record_id:randomUUID(),fixture_id:'local-egress-model',record_type:'monitoring',data_source:'sensor',recording_status:'recording',calibration:{empty_distance_mm:300},measurements,result:null,created_at:new Date(start).toISOString()};
+const bytes=x=>Buffer.byteLength(JSON.stringify(x)),full=bytes(boundedRecordView(record)),window=bytes(boundedRecordView(record,null,120)),delta=bytes(boundedRecordView(record,null,120,measurements.at(-7).reading_id)),unchanged=bytes(boundedRecordView(record,null,120,measurements.at(-1).reading_id));
+console.log(JSON.stringify({free_allowance_gb:5,daily_budget_mb_for_30_days:166.7,suggested_daily_target_mb:130,local_live_response_bytes:{full,window,delta_six_readings:delta,unchanged},incremental_reduction_vs_full_percent:Math.round((1-delta/full)*1000)/10,model_only:'Excludes database-to-function traffic, upload acknowledgments, auth, other tabs/users/services and headers. Check actual organization usage after deployment; this is not a quota guarantee.'},null,2));

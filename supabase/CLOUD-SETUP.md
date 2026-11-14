@@ -1,6 +1,6 @@
 # ESP → Supabase → frontend
 
-The ESP sends paired measurements over **verified HTTPS** to the project's
+The ESP sends single-sensor measurements over **verified HTTPS** to the project's
 `drain-api` Edge Function. It authenticates and validates the point, runs the
 existing calibration/drainage logic and atomically saves to `drain_records`.
 The frontend retrieves records, forecasts and alerts from the same function.
@@ -14,7 +14,7 @@ on `utexas`.
 
 ## Existing installation and deployment
 
-No new SQL migration/table is introduced. Keep drain_records, dm_devices,
+Apply `migrations/202611120001_single_sensor.sql` before deploying this version. Keep drain_records, dm_devices,
 dm_device_members and dm_device_keys. Calibration, drainage, forecast and alert
 modules now live in functions/_shared; existing Node modules re-export those
 same functions for compatibility and local tests. The Node API and USB workflow
@@ -53,6 +53,8 @@ Upload device/us100_wifi_upload/us100_wifi_upload.ino with **Arduino Nano ESP32*
 115200. No Supabase service key or admin token is placed on the ESP.
 
 ## Recover a pending point from the old Mac endpoint
+
+Finish recovery of old two-sensor payloads before applying the single-sensor migration. New firmware/API rejects the old payload shape; preserve any unresolved journal for review.
 
 Configure can retain the active recording ID and a specific previous endpoint
 in the header. It first verifies that the same recording/fixture and sensor key
@@ -108,8 +110,14 @@ npm run wifi:prepare -- friend-sink drainage
 ```
 
 Commands now contact Supabase, not localhost:8000. Successful empty calibration
-is reused. It is separate from the three completed drainage runs used by the
-existing slow-drain status/alert rules.
+is reused. Drainage setup (two tap-off runs on a drain you confirm is clear) saves a
+per-sink profile that now sets the slow-drain status, alert and email limits. Sinks
+without a profile keep the earlier learn-from-first-three-drains rules.
+
+Before testing on hardware: apply `migrations/202611130001_drainage_profile.sql`
+(`supabase db push` or the SQL editor), then `npm run cloud:deploy` so the hosted
+function includes the profile logic. Without the migration, saving a completed
+profile is rejected by the database.
 
 Limits remain unchanged: two working sensor locations for calibration/drainage,
 5000 points per record, one pending board point with acquisition paused offline,

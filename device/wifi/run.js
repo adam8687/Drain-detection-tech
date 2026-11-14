@@ -118,7 +118,7 @@ try {
       await privateWrite(headerPath, firmwareHeader(config, result.record.record_id, result.key));
       console.log(`READY: ${fixture}, ${type}, record ${result.record.record_id}.`);
       console.log('Generated ignored secrets.h. Wi-Fi credentials and fixture key were NOT printed.');
-      console.log(`Sensor mode: ${config.uart ? 'UART; rear jumpers ON' : 'trigger/echo; rear jumpers OFF'}; second sensor ${config.second ? 'enabled' : 'disabled'}.`);
+      console.log(`Sensor mode: ${config.uart ? 'UART; rear jumpers ON' : 'trigger/echo; rear jumpers OFF'}; one US-100 sensor.`);
       console.log('Open device/us100_wifi_upload/us100_wifi_upload.ino in Arduino IDE; select Nano ESP32, its USB port, and Upload.');
       console.log('Do not run the USB uploader. If this ID was already sampled before a board restart, finish it and prepare a new recording.');
     } else if (command === 'finish' || command === 'watch') {
@@ -129,7 +129,7 @@ try {
         await api(config.local, token, `/records/${entry.recordId}/finish`, {});
         console.log('Recording finished. Keep the board stopped; prepare a new recording before the next upload.');
       } else {
-        const initial = await api(config.local, token, `/records/${entry.recordId}`);
+        const initial = await api(config.local, token, `/records/${entry.recordId}?window=1`);
         const previousIds = new Set(initial.record.measurements.map(p => p.reading_id));
         console.log(`Waiting up to 60 seconds for a NEW physical-sensor point for ${entry.fixture}. No test measurements are generated.`);
         const store = createRecordStore(dbConfig);
@@ -137,21 +137,21 @@ try {
           const until = Date.now() + 60000;
           let found = false;
           while (Date.now() < until) {
-            const view = await api(config.local, token, `/records/${entry.recordId}`);
+            const view = await api(config.local, token, `/records/${entry.recordId}?window=1`);
             if (view.record.measurements.some(p => !previousIds.has(p.reading_id))) {
               const dbRecord = await store.get(entry.recordId);
-              const frontend = await api(`${config.web}/api/backend`, token, `/records/${entry.recordId}`);
+              const frontend = await api(`${config.web}/api/backend`, token, `/records/${entry.recordId}?window=120`);
               const point = verifyStoredPoint({ apiRecord: view.record, dbRecord, frontendRecord: frontend.record,
                 fixture: entry.fixture, recordId: entry.recordId, previousIds });
               if (point) {
                 console.log('PASS: a new sensor point matches exactly in the API, hosted Supabase and website proxy.');
-                for (const name of ['sensor_a','sensor_b']) console.log(`${name}: ${point[name].status === 'ok' ? point[name].distance_mm + ' mm' : point[name].status + ' (no valid distance)'}`);
+                for (const name of ['sensor']) console.log(`${name}: ${point[name].status === 'ok' ? point[name].distance_mm + ' mm' : point[name].status + ' (no valid distance)'}`);
                 console.log('Transport verified. Validate sensor distances against a ruler separately.');
                 found = true; break;
               }
             }
             if (view.record.recording_status === 'finished') throw Error('Recording finished before a new point arrived. Prepare a new recording, upload, and run watch while it is active.');
-            await pause(1000);
+            await pause(3000);
           }
           if (!found) throw Error('No new sensor point arrived in 60 seconds. Check Serial Monitor, Wi-Fi, API address, fixture key and recording ID.');
         } finally { await store.close(); }

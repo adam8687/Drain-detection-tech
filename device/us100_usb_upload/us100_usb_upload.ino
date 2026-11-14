@@ -1,13 +1,10 @@
 // Nano ESP32: request/response USB readings for the project's Mac uploader.
 // Default: one US-100 in trigger/echo mode (rear jumper removed).
 // A: 3V3 -> VCC, GND -> GND, D1 -> Trig, D0 <- Echo.
-// Optional B: shared 3V3/GND, D3 -> Trig, D2 <- Echo.
 #include <Arduino.h>
 
 constexpr bool USE_UART = false;            // true requires rear jumper(s) ON
-constexpr bool SECOND_SENSOR_ENABLED = false;
 HardwareSerial uartA(1);
-HardwareSerial uartB(2);
 String command;
 
 struct Reading {
@@ -63,12 +60,8 @@ void setup() {
   Serial.begin(115200);
   if (USE_UART) {
     uartA.begin(9600, SERIAL_8N1, D0, D1);
-    if (SECOND_SENSOR_ENABLED) uartB.begin(9600, SERIAL_8N1, D2, D3);
   } else {
     pinMode(D1, OUTPUT); digitalWrite(D1, LOW); pinMode(D0, INPUT);
-    if (SECOND_SENSOR_ENABLED) {
-      pinMode(D3, OUTPUT); digitalWrite(D3, LOW); pinMode(D2, INPUT);
-    }
   }
   command.reserve(48);
 }
@@ -85,14 +78,8 @@ void loop() {
     if (command.startsWith("READ ") && validId(command.substring(5))) {
       const String id = command.substring(5);
       const Reading a = readSensor(D1, D0, uartA);
-      Reading b = {-1, "timeout"};
-      if (SECOND_SENSOR_ENABLED) {
-        delay(70);  // Separate acoustic measurements; verify spacing physically.
-        b = readSensor(D3, D2, uartB);
-      }
       Serial.print("{\"reading_id\":\""); Serial.print(id);
-      Serial.print("\",\"sensor_a\":"); printReading(a);
-      Serial.print(",\"sensor_b\":"); printReading(b);
+      Serial.print("\",\"sensor\":"); printReading(a);
       Serial.println("}");
     }
     command = "";

@@ -1,6 +1,5 @@
 #pragma once
 constexpr bool USE_UART = false; // false = rear jumper removed; true = installed.
-constexpr bool SECOND_SENSOR_ENABLED = false;
 // Copy this file to secrets.h in this folder. secrets.h is ignored by Git.
 constexpr char WIFI_SSID[] = "YOUR_2_4_GHZ_WIFI";
 constexpr char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";

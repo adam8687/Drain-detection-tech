@@ -36,7 +36,7 @@ test('upstream device keys can only append physical readings for their own fixtu
   const key=(await api('/devices/alice-sink/keys','alice-session',{})).body.key;assert.match(key,/^dk_/);
   const own=(await api('/records','alice-session',{fixture_id:'alice-sink',data_source:'sensor',record_type:'monitoring'})).body;
   const other=(await api('/records',ADMIN,{fixture_id:'other-sink',data_source:'sensor',record_type:'monitoring'})).body;
-  const point={reading_id:randomUUID(),timestamp:new Date().toISOString(),sensor_a:{distance_mm:200,status:'ok'},sensor_b:{distance_mm:210,status:'ok'}};
+  const point={reading_id:randomUUID(),timestamp:new Date().toISOString(),sensor:{distance_mm:200,status:'ok'}};
   assert.equal((await api(`/records/${own.record_id}/measurements`,key,point)).status,201);
   assert.equal((await api(`/records/${other.record_id}/measurements`,key,point)).status,403);
   assert.equal((await api(`/records/${own.record_id}/measurements`,'alice-session',{...point,reading_id:randomUUID()})).status,403);
