@@ -50,7 +50,8 @@ export async function uploadNext(outbox, { base, token = '', fetcher = fetch, fo
   const item = outbox.next();
   if (!item) return null;
   const response = await fetcher(`${base}/api/v1/records/${item.record_id}/measurements`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    // USB already uploads every captured point without a batch delay.
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Drain-Live-Capability':'1', 'X-Drain-Live-Active':'1', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: item.body, signal: AbortSignal.timeout(15000),
   });
   const value = await response.json().catch(() => null);

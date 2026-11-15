@@ -12,6 +12,11 @@
 #include <time.h>
 #include "secrets.h"
 #include "drain_activity.h"
+#include "live_mode.h"
+#include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 // Serial output costs time: a USB serial print can block once its buffer fills with nothing reading it, and set-up
 // waits for a monitor to attach. The build is therefore silent and the messages below compile to nothing. For a
@@ -32,13 +37,18 @@
 HardwareSerial uartA(1);
 Preferences state;
 String pendingUrl, pendingBody, pendingJournal;
+String recordId = SENSOR_RECORD_ID, blockedRecordId;
+bool selectRecording = true;
+uint32_t lastDiscovery = 0;
 DrainActivity activity;  // decides when a finished drain should be uploaded at once
+LiveMode liveMode;
+QueueHandle_t samples = nullptr;
+std::atomic<bool> samplingEnabled{false}, samplingRunning{false}, sampleOverflow{false};
 bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
-uint32_t lastAttempt = 0, lastSample = 0;
+uint32_t lastAttempt = 0;
 // Readings are journaled one by one, then uploaded together (server limit: 20 per upload).
 // 10 readings x 0.5 s = one upload about every 5 s, which keeps the number of requests low.
-constexpr int BATCH_SIZE = 10;
 uint32_t lastPostMs = 100000;
 // Kept for the life of the sketch so the TLS connection can be reused (keep-alive).
 WiFiClient plainClient; WiFiClientSecure secureClient; HTTPClient http;
@@ -50,8 +60,10 @@ uint32_t lastStatus = 0;
 String stopReason;
 
 struct Reading { int distanceMm; const char* status; };
+struct Sample { char id[37]; char time[32]; Reading reading; bool drainEnded; };
 
 void stop(const String& reason) {
+  samplingEnabled.store(false);
   stopReason = reason;
   LOG_LINE(reason);
   stopped = true;
@@ -114,6 +126,87 @@ String timestamp() {
   return String(out);
 }
 
+// Sampling runs independently of TLS, HTTP and flash writes. The bounded queue
+// holds about one minute; an overrun is explicit instead of silently losing points.
+void sampleTask(void*) {
+  samplingRunning.store(true);
+  TickType_t wake = xTaskGetTickCount();
+  while (samplingEnabled.load()) {
+    Sample sample;
+    timestamp().toCharArray(sample.time, sizeof(sample.time));
+    sample.reading = readSensor(D1, D0, uartA);
+    newId().toCharArray(sample.id, sizeof(sample.id));
+    sample.drainEnded = activity.update(sample.reading.distanceMm);
+    if (xQueueSend(samples, &sample, 0) != pdTRUE) { sampleOverflow.store(true); samplingEnabled.store(false); break; }
+    vTaskDelayUntil(&wake, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+  }
+  samplingRunning.store(false);
+  vTaskDelete(nullptr);
+}
+
+bool beginRequest(const String& url) {
+  if (url.startsWith("https://") && !caSet) { secureClient.setCACert(API_ROOT_CA); caSet = true; }
+  http.setReuse(true);
+  const bool ready = url.startsWith("https://") ? http.begin(secureClient,url) : http.begin(plainClient,url);
+  if (!ready) return false;
+  http.setConnectTimeout(5000); http.setTimeout(5000);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + SENSOR_KEY);
+  http.addHeader("X-Drain-Live-Capability", "1");
+  http.addHeader("X-Drain-Live-Active", liveMode.active(millis()) ? "1" : "0");
+  const char* headers[] = {"X-Drain-Live-For-Ms"}; http.collectHeaders(headers,1);
+  return true;
+}
+
+// A step can finish with readings in flight. Archive these locally against their
+// ORIGINAL recording, never send them into the new calibration/monitoring step.
+bool finishStep(bool rejected) {
+  samplingEnabled.store(false);
+  while (samplingRunning.load()) delay(10);
+  const bool queued = samples && uxQueueMessagesWaiting(samples)>0;
+  if (rejected || queued) {
+    File archive=FFat.open(String("/unsent-")+recordId+".txt","a");
+    if(!archive)return false;
+    bool good=true;
+    if(rejected)good=archive.print(pendingJournal)==pendingJournal.length();
+    if(queued){
+      const String url=String(API_BASE_URL)+"/api/v1/records/"+recordId+"/measurements\n";
+      good=good&&archive.print(url)==url.length();
+      Sample sample;
+      while(xQueueReceive(samples,&sample,0)==pdTRUE){
+        const String point=String("{\"reading_id\":\"")+sample.id+"\",\"timestamp\":\""+sample.time+"\",\"sensor\":"+sensorJson(sample.reading)+"}\n";
+        if(archive.print(point)!=point.length()){good=false;break;}
+      }
+    }
+    archive.flush();archive.close();if(!good)return false;
+  }
+  if(rejected&&FFat.exists("/pending.txt")&&!FFat.remove("/pending.txt"))return false;
+  if(samples){vQueueDelete(samples);samples=nullptr;}
+  pendingBody="";pendingUrl="";pendingJournal="";batchCount=0;batchReady=false;
+  selectRecording=true;lastDiscovery=0;
+  return true;
+}
+
+bool discoverRecording() {
+  if(lastDiscovery && uint32_t(millis()-lastDiscovery)<2000)return false;
+  lastDiscovery=millis();
+  if(!beginRequest(String(API_BASE_URL)+"/api/v1/sensor/active-record")){stop("Could not check setup recording.");return false;}
+  const uint32_t started=millis();const int code=http.GET();
+  const String reply=code==200?http.getString():String("");
+  const long duration=http.header("X-Drain-Live-For-Ms").toInt();http.end();
+  if(code==200)liveMode.apply(duration>0?uint32_t(duration):0,started);
+  else if(code==401||code==403){stop("Device access was rejected. Contact your installer.");return false;}
+  if(code!=200)return false;
+  const String field="\"record_id\":\"";const int start=reply.indexOf(field);
+  if(start<0)return false;
+  const String next=reply.substring(start+field.length(),start+field.length()+36);
+  if(!validId(next.c_str())||next==blockedRecordId)return false;
+  if(state.putString("record",next)==0){stop("Could not save the setup recording.");return false;}
+  recordId=next;recoveredRun=false;selectRecording=false;
+  return true;
+}
+
 // Journal format: line 1 = URL, then one measurement JSON per line. The batch is built in memory and written once, when it
 // is complete and about to upload: one flash write per batch instead of one per reading. A power loss can lose only the
 // readings of the batch still being collected (a few seconds), never a batch that is already queued for upload.
@@ -151,11 +244,19 @@ void setup() {
   if (!FFat.begin(INITIALIZE_EMPTY_FILESYSTEM) || !state.begin("drain-wifi", false)) {
     stop("Storage unavailable. See README for first-time filesystem initialization."); return;
   }
-  recoveredRun = state.getString("started", "") == SENSOR_RECORD_ID;
+  // Keep a dynamically selected recording across power loss so a saved journal
+  // can only be recovered to its original destination. Explicit reprovisioning
+  // still refuses an old journal belonging to a different configuration.
+  if(state.getString("configured","")==SENSOR_RECORD_ID)recordId=state.getString("record",SENSOR_RECORD_ID);
+  else if(state.putString("configured",SENSOR_RECORD_ID)==0){stop("Could not save device configuration.");return;}
+  recoveredRun = state.getString("started", "") == recordId;
+  if(recoveredRun&&!RESUME_AFTER_RESTART)blockedRecordId=recordId;
   if (FFat.exists("/pending.txt")) {
     File file = FFat.open("/pending.txt", "r");
     pendingUrl = file.readStringUntil('\n');
     String lines = file.readString(); file.close();
+    pendingJournal = pendingUrl + "\n" + lines;
+    if (!pendingJournal.endsWith("\n")) pendingJournal += "\n";
     String points;
     if (lines.indexOf('\n') < 0 && lines.startsWith("{\"reading_id\":") && lines.endsWith("}")) lines += "\n";  // older single-point journal
     while (lines.indexOf('\n') >= 0) {  // complete lines only; a torn final line is dropped
@@ -164,9 +265,9 @@ void setup() {
       points += (points.isEmpty() ? "" : ",") + line; batchCount++;
     }
     pendingBody = points.isEmpty() ? String("") : String("{\"measurements\":[") + points + "]}";
-    const String expected = base + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
+    const String expected = base + "/api/v1/records/" + recordId + "/measurements";
     if (pendingUrl != expected && strlen(PREVIOUS_API_BASE_URL)) {
-      const String original = String(PREVIOUS_API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
+      const String original = String(PREVIOUS_API_BASE_URL) + "/api/v1/records/" + recordId + "/measurements";
       if (pendingUrl == original) {
         // Only migrate the endpoint for a verified SAME recording. Keep the old
         // on-disk journal intact until cloud acknowledgement; retries stay exact.
@@ -178,6 +279,7 @@ void setup() {
       stop("Pending point belongs to another destination or is damaged. Restore original configuration; do not erase it."); return;
     }
     batchReady = true;  // a journaled batch is uploaded exactly as saved, never extended
+    selectRecording=false;
     LOG_LINE("Recovering saved point(s) with their original IDs and timestamps.");
   }
   if (USE_UART) {
@@ -190,6 +292,7 @@ void setup() {
 }
 
 void loop() {
+  if (sampleOverflow.load() && !stopped) { stop("Sampling queue full. Saved batch retained; check Wi-Fi and start a new recording."); }
   // USB serial reconnects after reset/upload. Repeat diagnostics so attaching
   // later still reveals the problem, without printing credentials or payloads.
   if (stopped) {
@@ -219,23 +322,28 @@ void loop() {
     LOG_F("Wi-Fi and UTC clock ready. ESP IP: %s\n", WiFi.localIP().toString().c_str());
   }
   if (!batchReady) {
+    if(selectRecording&&!discoverRecording()){delay(50);return;}
     if (pendingBody.isEmpty() && recoveredRun && !RESUME_AFTER_RESTART) {
-      stop("Restart detected. Pending point recovered. Finish the old recording and configure a NEW record ID before sampling."); return;
+      selectRecording=true;return;
     }
-    if (state.getString("started", "") != SENSOR_RECORD_ID && state.putString("started", SENSOR_RECORD_ID) == 0) {
+    if (state.getString("started", "") != recordId && state.putString("started", recordId) == 0) {
       stop("Could not save recording state."); return;
     }
-    const uint32_t sinceSample = millis() - lastSample;
-    if (sinceSample < SAMPLE_INTERVAL_MS) delay(SAMPLE_INTERVAL_MS - sinceSample);
-    lastSample = millis();
-    const String time = timestamp();
-    const Reading a = readSensor(D1, D0, uartA);
-    const bool drainEnded = activity.update(a.distanceMm);  // failed readings are -1 and change nothing
-    const String point = String("{\"reading_id\":\"") + newId() + "\",\"timestamp\":\"" + time
-      + "\",\"sensor\":" + sensorJson(a) + "}";
+    if (sampleOverflow.load()) { stop("Sampling queue full after an upload interruption. Saved batch retained; start a new recording."); return; }
+    if (!samples) {
+      samples = xQueueCreate(128, sizeof(Sample));
+      if (!samples) { stop("Sampling queue unavailable."); return; }
+      samplingEnabled.store(true);
+      if (xTaskCreatePinnedToCore(sampleTask,"drain-sampling",4096,nullptr,2,nullptr,1) != pdPASS) { stop("Sampling task unavailable."); return; }
+    }
+    Sample sample;
+    if (xQueueReceive(samples,&sample,pdMS_TO_TICKS(100)) != pdTRUE) return;
+    const bool drainEnded = sample.drainEnded;
+    const String point = String("{\"reading_id\":\"") + sample.id + "\",\"timestamp\":\"" + sample.time
+      + "\",\"sensor\":" + sensorJson(sample.reading) + "}";
     const bool firstOfBatch = pendingBody.isEmpty();
     if (firstOfBatch) {
-      pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + SENSOR_RECORD_ID + "/measurements";
+      pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + recordId + "/measurements";
       pendingBody = String("{\"measurements\":[") + point + "]}";
     } else {
       pendingBody.remove(pendingBody.length() - 2);  // reopen "]}"
@@ -245,42 +353,43 @@ void loop() {
     if (firstOfBatch) pendingJournal = pendingUrl + "\n" + point + "\n"; else pendingJournal += point + "\n";
     // A batch uploads when it is full, or at once when a drain has just ended (the sink is dry, so pausing to upload
     // loses nothing and the result reaches the app in about a second instead of waiting for the batch to fill).
-    if (batchCount < BATCH_SIZE && !drainEnded) return;
+    if (batchCount < liveMode.batchSize(millis()) && !drainEnded) return;
     if (!writeJournal()) { stop("Could not persist the batch; upload stopped."); return; }
     batchReady = true;
   }
   const uint32_t elapsed = millis() - lastAttempt;
   if (elapsed < 100) { delay(100 - elapsed); }
   lastAttempt = millis();
-  if (pendingUrl.startsWith("https://") && !caSet) { secureClient.setCACert(API_ROOT_CA); caSet = true; }
-  http.setReuse(true);
-  const bool ready = pendingUrl.startsWith("https://") ? http.begin(secureClient, pendingUrl) : http.begin(plainClient, pendingUrl);
+  const bool ready = beginRequest(pendingUrl);
   if (!ready) { stop("Invalid backend URL; saved point retained."); return; }
-  http.setConnectTimeout(5000); http.setTimeout(5000);
-  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + SENSOR_KEY);
   const uint32_t postStart = millis();
   const int code = http.POST(pendingBody);
   const uint32_t postMs = millis() - postStart;
   // Current API returns a small canonical JSON acknowledgement, never the array.
   // Unexpected acknowledgements retain the point and stop instead of losing it.
-  const String reply = (code == 200 || code == 201) ? http.getString() : String("");
+  const String reply = (code == 200 || code == 201 || code == 409) ? http.getString() : String("");
+  const String liveDuration = http.header("X-Drain-Live-For-Ms");
   http.end();
   lastPostMs = code > 0 ? postMs : 100000;
   if (code <= 0) { secureClient.stop(); plainClient.stop(); }
   if (code == 200 || code == 201) {
-    const String recordField = String("\"record_id\":\"") + SENSOR_RECORD_ID + "\"";
+    const String recordField = String("\"record_id\":\"") + recordId + "\"";
     const bool finished = reply.indexOf("\"recording_status\":\"finished\"") >= 0;
     if (reply.indexOf(recordField) < 0 || (!finished && reply.indexOf("\"recording_status\":\"recording\"") < 0)) {
       stop("Unexpected acknowledgement; saved point retained for review."); return;
     }
+    if (sampleOverflow.load()) { stop("Sampling queue full during upload. Saved batch retained for recovery."); return; }
     if (!FFat.remove("/pending.txt")) { stop("Could not clear acknowledged point. Restart to retry safely."); return; }
+    // Missing commands (old servers), expired leases and restarts all mean normal.
+    long liveMs = liveDuration.toInt();
+    liveMode.apply(liveMs > 0 ? uint32_t(liveMs) : 0, postStart);
     pendingBody = ""; pendingUrl = ""; pendingJournal = ""; batchCount = 0; batchReady = false;
     LOG_F("Saved batch in Supabase. (%u ms, RSSI %d dBm)\n", (unsigned)postMs, WiFi.RSSI());
-    if (finished) stop("Recording finished. Create the next recording and update SENSOR_RECORD_ID.");
+    if (finished&&!finishStep(false))stop("Could not archive remaining readings. Contact your installer.");
+  } else if(code==409&&reply.indexOf("\"record_finished\"")>=0) {
+    if(!finishStep(true))stop("Could not preserve unsent readings. Saved batch retained.");
   } else if (code <= 0 || code == 408 || code == 429 || code >= 500) {
-    LOG_F("Connection/server unavailable (%d) after %u ms, RSSI %d dBm. Retrying saved point; sampling paused.\n", code, (unsigned)postMs, WiFi.RSSI());
+    LOG_F("Connection/server unavailable (%d) after %u ms, RSSI %d dBm. Retrying saved batch; sampling buffered.\n", code, (unsigned)postMs, WiFi.RSSI());
     delay(2000);
   } else {
     stop(String("Upload stopped (HTTP ") + code + "). Check recording, fixture key and backend. Saved point retained.");

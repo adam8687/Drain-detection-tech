@@ -18,7 +18,7 @@ export function useRecording(api: DrainApi, recordId: string | null) {
         const next = await api.record(recordId, null, controller.signal);
         if (controller.signal.aborted) return;
         setView(next); setError('');
-        if (next.record.recording_status === 'recording') timer = setTimeout(load, 1500);
+        if (next.record.recording_status === 'recording') timer = setTimeout(load, 750);
       } catch (err) {
         if (controller.signal.aborted) return;
         setError(err instanceof DrainApiError && err.status===401 ? 'Please sign in again to continue setup.' : 'We could not connect to your unit. Try again, or contact your installer.');

@@ -1,6 +1,7 @@
 import {validateDrainageAction,updateDrainageCalibration} from './drainage-calibration.js';
 import {createEmailNotifications,emailCandidates,emailReferenceSamples,verifiedUserEmail} from './email-notifications.js';
 import {SupabaseEmailStore} from './email-storage.js';
+import {LiveModeStore,liveInput} from './live-mode.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
@@ -35,6 +36,7 @@ export function createCloudHandler(config, {
   verifyUser = supabaseUserVerifier(config.url, config.serviceKey),
   notifications = createEmailNotifications({config:config.email??{enabled:false},deliveryStore:new SupabaseEmailStore(config.url,config.serviceKey),accessStore,userEmail:verifiedUserEmail(config.url,config.serviceKey)}),
 } = {}) {
+  const liveMode=new LiveModeStore(store,clock);
   if(config.emailWorkerToken&&config.emailWorkerToken.length<32)throw Error('Email worker token must have at least 32 characters');
   if (config.adminToken && config.adminToken.length < 32) throw Error('Cloud admin token must have at least 32 characters');
   const get = async id => { const row = await store.get(uuid(id, 'record_id')); if (!row) throw new ApiError(404, 'record_not_found', 'Recording not found'); return row; };
@@ -104,6 +106,12 @@ export function createCloudHandler(config, {
         if(!who.admin&&!who.emailWorker)throw new ApiError(403,'forbidden','Worker access required');return json(200,await notifications.flush());
       }
       const emailSettings=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/notifications$/);
+      const liveRoute=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/live-mode$/);
+      if(liveRoute&&['GET','POST'].includes(request.method)){
+        const fixture=deviceId(liveRoute[1]);await access(who,fixture,true);
+        if(request.method==='GET')return json(200,await liveMode.state(fixture));
+        const input=liveInput(await readBody(request));return json(200,await liveMode.state(fixture,input.enabled?'on':'off',input));
+      }
       if(emailSettings&&['GET','POST'].includes(request.method)){
         if(!who.userId)throw new ApiError(403,'forbidden','Sign in as the unit owner');const fixture=deviceId(emailSettings[1]);await access(who,fixture,true);
         if(request.method==='GET')return json(200,await notifications.preference(fixture,who.userId));
@@ -112,6 +120,7 @@ export function createCloudHandler(config, {
       if (path === '/api/v1/sensor/active-record' && request.method === 'GET') {
         if (!who.deviceId) throw new ApiError(403, 'forbidden', 'Use the fixture sensor key for automatic recording selection');
         const row = (await (store.headers?.bind(store) ?? store.list.bind(store))({fixture_id:who.deviceId,data_source:'sensor',recording_status:'recording'},1))[0];
+        if(request.headers.get('x-drain-live-capability')==='1')headers['X-Drain-Live-For-Ms']=String(await liveMode.command(who.deviceId,request.headers.get('x-drain-live-active')==='1',null,true));
         return json(200, {record:row ? {record_id:row.record_id,record_type:row.record_type,fixture_id:row.fixture_id} : null});
       }
       if (path === '/api/v1/history' && request.method === 'GET') {
@@ -195,6 +204,7 @@ export function createCloudHandler(config, {
           const target = who.deviceId ? await appendTarget({store,row,mutate,incoming:points.length,clock}) : id; let before = null;
           const result = await mutate(target, previous => { before = previous; return appendMeasurements(previous,points); });
           await saveNewDrainEvents(store, before, result.record);
+          if(who.deviceId&&request.headers.get('x-drain-live-capability')==='1')headers['X-Drain-Live-For-Ms']=String(await liveMode.command(who.deviceId,request.headers.get('x-drain-live-active')==='1',result.record.measurements.at(-1)?.timestamp));
           return json(result.duplicate ? 200 : 201, {...(target!==id?{continued_in:target}:{}),duplicate:result.duplicate,record_id:id,recording_status:result.record.recording_status,measurement_count:result.record.measurements.length,result:result.record.result,calibration:result.record.calibration});
         }
         if (action === 'finish' && request.method === 'POST') {

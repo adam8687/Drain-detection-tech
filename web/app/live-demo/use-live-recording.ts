@@ -5,6 +5,7 @@ import { DrainApi, DrainApiError } from '../../lib/api';
 import type { DataSource, RecordSummary, RecordView } from '../../lib/api';
 import { selectDeviceRecord, mergeLiveView } from '../../lib/chart-data';
 import { useSession } from '../../lib/supabase';
+import { useLiveMode } from '../../lib/use-live-mode';
 
 export function useLiveRecording(initialFixture = '', initialRecord = '', initialSource: DataSource = 'sensor') {
   const session = useSession();
@@ -20,6 +21,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   const [loading, setLoading] = useState(true);
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [demo,setDemo]=useState(false);
 
   function reportError(err: unknown) {
     setNeedsAuth(err instanceof DrainApiError && err.status === 401);
@@ -56,6 +58,8 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   const fixture = fixtures.some(f => f.id === fixtureChoice) ? fixtureChoice : records[0]?.fixture_id || fixtures[0]?.id || '';
   const fixtureRecords = useMemo(() => records.filter(r => r.fixture_id === fixture), [records, fixture]);
   const recordId = selectDeviceRecord(fixtureRecords, recordChoice);
+  const live=useLiveMode(api,fixture,demo&&source==='sensor'&&Boolean(recordId),'demo');
+  useEffect(()=>setDemo(false),[fixture,source,recordId]);
 
   useEffect(() => {
     if (!recordId) { setView(null); setLoadingRecord(false); return; }
@@ -72,7 +76,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
         setRecords(previous => previous.map(record => record.record_id === recordId
           ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.computed.sample_count, calibration: next.record.calibration, drain_status: next.computed.drain_status,drain_cycles:next.computed.drain_cycles }
           : record));
-        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), idle?15000:3000);}
+        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), live.active?750:idle?15000:3000);}else setDemo(false);
       } catch (err) {
         if (!controller.signal.aborted) {
           setView(null); setLoadingRecord(false); reportError(err);
@@ -82,9 +86,9 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
     }
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, recordId, refresh]);
+  }, [api, recordId, refresh,live.active]);
 
   return { source, setSource, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
-    records: fixtureRecords, recordId, setRecordId: setRecordChoice, view, error, needsAuth,
+    records: fixtureRecords, recordId, setRecordId: setRecordChoice, view, error, needsAuth,demo,setDemo,live,
     loading: loading || loadingRecord, refresh: () => setRefresh(n => n + 1) };
 }
