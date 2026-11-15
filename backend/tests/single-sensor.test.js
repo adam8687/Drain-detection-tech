@@ -43,3 +43,15 @@ test('incremental live responses return only new observations and recover from a
  const samples=Array.from({length:30},(_,i)=>point(i)),record={record_id:randomUUID(),fixture_id:'sink',record_type:'monitoring',data_source:'sensor',recording_status:'finished',calibration:{empty_distance_mm:300},measurements:samples,result:null};
  const next=boundedRecordView(record,null,120,samples[25].reading_id);assert.equal(next.computed.series_mode,'append');assert.equal(next.record.measurements.length,4);assert.equal(next.computed.water_levels.length,4);assert.equal(boundedRecordView(record,null,120,samples.at(-1).reading_id).record.measurements.length,0);assert.equal(boundedRecordView(record,null,120,randomUUID()).computed.series_mode,'replace');assert.throws(()=>boundedRecordView(record,0,120,samples[0].reading_id));
 });
+
+test('bounded computation matches full replay exactly across gaps, faults and stale data',()=>{
+ const now=Date.now(),measurements=Array.from({length:300},(_,i)=>({reading_id:randomUUID(),timestamp:new Date(now-200000+i*500+(i>150?10000:0)).toISOString(),sensor:i%29===0?{distance_mm:null,status:'timeout'}:{distance_mm:300-(i%80),status:'ok'}}));
+ const record={record_id:randomUUID(),fixture_id:'sink',record_type:'monitoring',data_source:'sensor',recording_status:'recording',calibration:{empty_distance_mm:300},measurements,result:null};
+ const full=boundedRecordView(record);
+ for(const [sample,window,after]of [[null,120,null],[null,10,measurements[295].reading_id],[null,10,measurements.at(-1).reading_id],[151,10,null],[0,10,null]]){
+  const actual=boundedRecordView(record,sample,window,after),replay=sample===null?full:boundedRecordView(record,sample);
+  const count=actual.record.measurements.length;
+  assert.deepEqual(actual.computed,{...replay.computed,series_mode:after?'append':'replace',timeline:count?replay.computed.timeline.slice(-count):[],water_levels:count?replay.computed.water_levels.slice(-count):[]});
+ }
+ const empty={...record,measurements:[]};assert.deepEqual(boundedRecordView(empty,null,120).computed,{...boundedRecordView(empty).computed,series_mode:'replace'});
+});

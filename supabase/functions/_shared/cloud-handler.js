@@ -200,6 +200,7 @@ export function createCloudHandler(config, {
         if (action === 'finish' && request.method === 'POST') {
           await access(who,row.fixture_id,true);
           const result = await mutate(id, previous => previous.recording_status === 'finished' ? {record:previous} : {record:{...previous,recording_status:'finished',result:previous.record_type==='drainage' ? analyzeDrainage(previous.measurements,previous.calibration).result : null}});
+          await saveNewDrainEvents(store, null, result.record);
           return json(200,{record:result.record,computed:computedView(result.record)});
         }
       }

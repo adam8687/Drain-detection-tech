@@ -1,18 +1,19 @@
 import {publicSensorRecord} from './single-sensor-migration.js';
 import { ApiError } from './validation.js';
 import { ordered } from './records-domain.js';
+import { isDeepStrictEqual } from 'node:util';
 const filtersAllowed = new Set(['fixture_id', 'record_type', 'data_source', 'recording_status', 'calibration_present','schema_version']);
 const unavailable = () => new ApiError(503, 'storage_unavailable', 'Storage unavailable. Apply the single-sensor SQL migration (202611120001_single_sensor.sql) and check database access.');
 const conflict = () => new ApiError(409, 'record_conflict', 'Record ID already exists or a recording is already active for this fixture and source.');
 const normalize = row => row ? publicSensorRecord({ ...row, created_at: new Date(row.created_at).toISOString() }) : null;
 const filterEntries = filters => Object.entries(filters).map(([key, value]) => { if (!filtersAllowed.has(key)) throw Error('Unsupported filter'); return [key, value]; });
 export class SupabaseRecordStore {
-  constructor(url, key, fetcher = fetch) { this.url = url; this.key = key; this.fetcher = fetcher; this.cache = new Map(); this.cacheBytes = 0; this.deltaOffUntil = 0; }
+  constructor(url, key, fetcher = fetch) { this.url = url; this.key = key; this.fetcher = fetcher; this.cache = new Map(); this.cacheBytes = 0; this.deltaOffUntil = 0; this.incrementalOffUntil = 0; this.revisions = new WeakMap(); }
   async request(path, options = {}, metadata = false, optional = false) {
     let response;
     try { response = await this.fetcher(`${this.url}/rest/v1/${path}`, { ...options, cache: 'no-store', signal: AbortSignal.timeout(10000), headers: { apikey: this.key, ...(this.key.startsWith('eyJ') ? { Authorization: `Bearer ${this.key}` } : {}), 'Content-Type': 'application/json', Prefer: 'return=representation', ...options.headers } }); }
     catch { throw new ApiError(503, 'supabase_unreachable', 'Cannot reach Supabase; no local fallback is used.'); }
-    if (optional && response.status === 404) return metadata ? { rows: [], total: 0 } : [];
+    if (optional && response.status === 404) return optional === 'missing' ? null : metadata ? { rows: [], total: 0 } : [];
     if (response.status === 409) throw conflict();
     if (!response.ok) throw unavailable();
     try {
@@ -25,11 +26,18 @@ export class SupabaseRecordStore {
     } catch { throw unavailable(); }
   }
   async ready() { await this.request('drain_records?select=record_id,schema_version,revision&limit=1'); }
+  copy(row, revision) {
+    const result = structuredClone(row);
+    // A revision belongs to the exact snapshot returned to the caller, not the
+    // latest cache entry (another request may have advanced that entry).
+    if (revision !== undefined) this.revisions.set(result, String(revision));
+    return result;
+  }
   // Revisions are checked against the database on every read: external writers stay
   // visible, while unchanged histories never cross the database network again.
   remember(raw) {
     const old = this.cache.get(raw.record_id);
-    if (old && Number(old.revision) > Number(raw.revision)) return normalize(raw);
+    if (old && Number(old.revision) > Number(raw.revision)) return this.copy(normalize(raw), raw.revision);
     if (old) { this.cacheBytes -= old.bytes; this.cache.delete(raw.record_id); }
     const row = normalize(raw), bytes = JSON.stringify(raw).length * 2;
     if (bytes <= 16 * 1024 * 1024) {
@@ -38,7 +46,7 @@ export class SupabaseRecordStore {
         const key = this.cache.keys().next().value; this.cacheBytes -= this.cache.get(key).bytes; this.cache.delete(key);
       }
     }
-    return structuredClone(row);
+    return this.copy(row, raw.revision);
   }
   keep(recordId, revision, row) {
     const old = this.cache.get(recordId);
@@ -65,11 +73,11 @@ export class SupabaseRecordStore {
     if (merged.length !== d.total) return null;
     const row = { ...cached.row, calibration: d.calibration, result: d.result, recording_status: d.recording_status, measurements: merged };
     this.keep(header.record_id, d.revision, row);
-    return structuredClone(row);
+    return this.copy(row, d.revision);
   }
   async hydrate(header) {
     const cached = this.cache.get(header.record_id);
-    if (cached && header.revision !== undefined && String(cached.revision) === String(header.revision)) return structuredClone(cached.row);
+    if (cached && header.revision !== undefined && String(cached.revision) === String(header.revision)) return this.copy(cached.row, cached.revision);
     if (cached && header.revision !== undefined) { const fresh = await this.delta(header, cached); if (fresh) return fresh; }
     const raw = (await this.request(`drain_records?record_id=eq.${encodeURIComponent(header.record_id)}&select=*&limit=1`))[0];
     return raw ? this.remember(raw) : null;
@@ -105,7 +113,24 @@ export class SupabaseRecordStore {
     // Send the comparison in a POST body, not a URL that grows with the recording.
     const expected = { measurements: previous.measurements, calibration: previous.calibration, result: previous.result, recording_status: previous.recording_status };
     const changes = { calibration: next.calibration, measurements: next.measurements, result: next.result, recording_status: next.recording_status, ...(notificationEvents.length?{notification_events:notificationEvents}:{}),...(notificationReferences.length?{notification_references:notificationReferences}:{}) };
-    const rows = await this.request('rpc/update_drain_record_compact', { method: 'POST', body: JSON.stringify({ p_record_id: previous.record_id, p_expected: expected, p_changes: changes }) });
+    let rows;
+    const revision = this.revisions.get(previous);
+    // Prefix-preserving appends send only new evidence. Late/out-of-order points
+    // and edits use the established full comparison path without losing data.
+    const appendOnly = next.measurements.length >= previous.measurements.length && next.measurements.length - previous.measurements.length <= 20 &&
+      previous.measurements.every((point,index) => point === next.measurements[index] || isDeepStrictEqual(point,next.measurements[index]));
+    if (revision !== undefined && appendOnly && Date.now() >= this.incrementalOffUntil) {
+      const {measurements: _old, ...smallExpected} = expected;
+      const {measurements: _new, ...smallChanges} = changes;
+      rows = await this.request('rpc/update_drain_record_incremental', {method:'POST',body:JSON.stringify({
+        p_record_id:previous.record_id,p_revision:revision,p_expected:smallExpected,
+        p_changes:{...smallChanges,append_measurements:next.measurements.slice(previous.measurements.length)}
+      })}, false, 'missing');
+      // Deployment order is safe: a missing RPC falls back, while real database
+      // errors and stale-revision conflicts retain their normal retry behavior.
+      if (rows === null) this.incrementalOffUntil = Date.now() + 300000;
+    }
+    if (rows == null) rows = await this.request('rpc/update_drain_record_compact', { method: 'POST', body: JSON.stringify({ p_record_id: previous.record_id, p_expected: expected, p_changes: changes }) });
     if (rows.length > 1 || (rows.length && rows[0].record_id !== next.record_id)) throw unavailable();
     if (rows.length === 1) this.remember({...next,revision:rows[0].revision});
     else { const old = this.cache.get(previous.record_id); if (old) {this.cacheBytes -= old.bytes; this.cache.delete(previous.record_id);} }

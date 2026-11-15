@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { configFromEnv } from './config.js';
 import { createRecordStore } from './records-storage.js';
 import { buildAlerts, summarizeAlerts, SEVERITIES } from './alerts.js';
-import { appendTarget } from '../../supabase/functions/_shared/rollover.js';
+import { appendTarget, saveNewDrainEvents } from '../../supabase/functions/_shared/rollover.js';
 import { createStore as createAccessStore } from './storage.js';
 import { DEVICE_KEY_PREFIX, hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
@@ -188,7 +188,9 @@ export function createApp(config, store = createRecordStore(config), {
           const points = validateMeasurements(await body(req));
           // A full monitoring recording continues in a new one; the acknowledgement keeps the board's own record_id.
           const target = who.deviceId ? await appendTarget({ store, row: current, mutate, incoming: points.length }) : id;
-          const result = await mutate(target, previous => appendMeasurements(previous, points));
+          let before = null;
+          const result = await mutate(target, previous => { before = previous; return appendMeasurements(previous, points); });
+          await saveNewDrainEvents(store, before, result.record);
           // Return a compact acknowledgement; full records are retrieved separately.
           return json(result.duplicate ? 200 : 201, { ...(target !== id ? { continued_in: target } : {}), duplicate: result.duplicate, record_id: id, recording_status: result.record.recording_status, measurement_count: result.record.measurements.length, result: result.record.result, calibration: result.record.calibration });
         }
@@ -200,6 +202,7 @@ export function createApp(config, store = createRecordStore(config), {
             const result = previous.record_type === 'drainage' ? analyzeDrainage(previous.measurements, previous.calibration).result : null;
             return { record: { ...previous, recording_status: 'finished', result } };
           });
+          await saveNewDrainEvents(store, null, result.record);
           return json(200, { record: result.record, computed: computedView(result.record) });
         }
         if (action === 'stream' && req.method === 'GET') {

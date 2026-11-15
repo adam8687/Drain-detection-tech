@@ -21,7 +21,7 @@ if(process.env.PRODUCT_TEST_SKIP_BUILD!=='1')await build(testEnv);
 const output=process.env.PRODUCT_TEST_OUTPUT || '/tmp/drain-product-tests';
 await mkdir(output,{recursive:true});
 const userId=randomUUID(), token=`eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({sub:userId,exp:Math.floor(Date.now()/1000)+7200,aud:'authenticated'})).toString('base64url')}.test`;
-const session={access_token:token,refresh_token:'local-test-refresh',expires_in:7200,expires_at:Math.floor(Date.now()/1000)+7200,token_type:'bearer',user:{id:userId,aud:'authenticated',role:'authenticated',email:'owner@example.test',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}};
+const session={access_token:token,refresh_token:'local-test-refresh',expires_in:7200,expires_at:Math.floor(Date.now()/1000)+7200,token_type:'bearer',user:{id:userId,aud:'authenticated',role:'authenticated',email:'owner@example.test',app_metadata:{},user_metadata:{company_name:'Product Test Company'},created_at:new Date().toISOString()}};
 const app=createApp({...configFromEnv({STORAGE_BACKEND:'sqlite',SQLITE_PATH:':memory:'}),apiKey:'local-product-test-admin' },undefined,{verifyUser:async t=>t===token?userId:null});
 await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
 const backend=`http://127.0.0.1:${app.server.address().port}`, port=Number(process.env.PRODUCT_TEST_PORT||3127), origin=`http://127.0.0.1:${port}`;
@@ -81,12 +81,15 @@ async function journey(profile,index){
   const append=async(points,expected)=>{const row=await active(expected);for(const point of points){const res=await fetch(`${backend}/api/v1/records/${row.record_id}/measurements`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${sensorKey}`},body:JSON.stringify(point)});assert.equal(res.status,201,await res.text());}};
   await page.goto(origin+'/add-unit');
   await check('signed-out setup explains sign-in',()=>page.getByText('Sign in to register sensors to your account.',{exact:false}).waitFor());
-  await page.getByLabel('Email',{exact:true}).fill('owner@example.test');await page.getByLabel('Password',{exact:true}).fill('test-password');
-  await page.getByRole('button',{name:'Create account',exact:true}).click();await check('signup sends confirmation back to this app',async()=>{await page.getByRole('alert').filter({hasText:'Check your email'}).waitFor();assert.equal(authRedirects.signup,origin+'/login');});
-  await page.getByRole('button',{name:'Forgot password?',exact:true}).click();await check('password recovery uses the app reset page',async()=>{await page.getByRole('alert').filter({hasText:'If an account uses this email'}).waitFor();assert.equal(authRedirects.recovery,origin+'/reset-password');});
-  await page.getByLabel('Password',{exact:true}).fill('wrong-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.getByLabel('Company name',{exact:true}).fill('Product Test Company');await page.getByLabel('Work email',{exact:true}).fill('owner@example.test');await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByLabel('Repeat password',{exact:true}).fill('test-password');
+  await page.getByRole('button',{name:'Create company account',exact:true}).click();await check('signup sends confirmation back to this app',async()=>{await page.getByRole('heading',{name:'Check your email',exact:true}).waitFor();assert.equal(authRedirects.signup,origin+'/login');});
+  await page.getByRole('button',{name:"I've confirmed — log in",exact:true}).click();
+  await page.getByRole('button',{name:'Forgot password?',exact:true}).click();await page.getByRole('button',{name:'Send reset link',exact:true}).click();await check('password recovery uses the app reset page',async()=>{await page.getByRole('status').filter({hasText:'If an account uses this email'}).waitFor();assert.equal(authRedirects.recovery,origin+'/reset-password');});
+  await page.getByRole('button',{name:'Back to log in',exact:true}).click();
+  await page.getByLabel('Password',{exact:true}).fill('wrong-password');await page.getByRole('button',{name:'Log in',exact:true}).click();
   await check('incorrect password can be corrected',()=>page.getByRole('alert').filter({hasText:'not recognized'}).waitFor());
-  await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  const fleetLoaded=Promise.all(['/devices','/records','/alerts'].map(path=>page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/api/v1'+path)&&r.status()===200)));
+  await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByRole('button',{name:'Log in',exact:true}).click();await page.waitForURL('**/dashboard');await fleetLoaded;await page.goto(origin+'/add-unit');
   await page.getByLabel('Unit ID',{exact:true}).fill(fixture);await page.getByLabel('Location',{exact:true}).fill('Kitchen / upstairs bathroom');await layout('registration');
   const navigation=page.getByLabel('Navigation menu',{exact:true});
   if(await navigation.isVisible()){
@@ -104,7 +107,7 @@ async function journey(profile,index){
   await append([sample(Date.now(),0,true)]);await check('one failed sensor prevents continuing',async()=>{await page.getByText('Check the sensor',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
   await append([sample(Date.now())]);await page.getByRole('button',{name:'Continue',exact:true}).click();
   await page.getByLabel('The sink is empty',{exact:false}).check();await page.getByRole('button',{name:'Record empty sink',exact:false}).click();
-  await append(Array.from({length:20},(_,i)=>sample(Date.now()-30000+i*500,i%2?6:0)),'calibration');
+  await append(Array.from({length:20},(_,i)=>sample(Date.now()-30000+i*500,i%2?14:0)),'calibration');
   await check('unstable empty readings cannot finish calibration',async()=>{await page.getByText('Keep the sink empty and the sensor mount still.',{exact:true}).waitFor();assert.equal(await page.getByText('Build your drain profile',{exact:true}).count(),0);});
   await append(Array.from({length:20},(_,i)=>sample(Date.now()-10000+i*500)),'calibration');
   await page.getByRole('heading',{name:'Measure normal drainage',exact:true}).waitFor();
