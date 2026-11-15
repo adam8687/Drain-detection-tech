@@ -14,8 +14,12 @@ static std::vector<int> idle(int n, int mm = 300, int amp = 1) { std::vector<int
 static void add(std::vector<int>& a, const std::vector<int>& b) { a.insert(a.end(), b.begin(), b.end()); }
 // A use: fill to 45 mm, hold, fall to dry (the sensor reads 300 - depth).
 static std::vector<int> use(int holdReadings, int fallReadings) {
-  std::vector<int> v; for (int i = 0; i < 6; i++) v.push_back(300 - 45 * i / 5 + noise(1)); for (int i = 0; i < holdReadings; i++) v.push_back(255 + noise(1));
-  for (int i = 0; i < fallReadings; i++) v.push_back(255 + 45 * (i + 1) / fallReadings + noise(1)); return v; }
+  std::vector<int> v;
+  for (int i = 0; i < 6; i++) v.push_back(300 - 45 * i / 5 + noise(1));
+  for (int i = 0; i < holdReadings; i++) v.push_back(255 + noise(1));
+  for (int i = 0; i < fallReadings; i++) v.push_back(255 + 45 * (i + 1) / fallReadings + noise(1));
+  return v;
+}
 
 int main() {
   { DrainActivity d; std::vector<int> r = idle(20); add(r, use(6, 16)); const int endAt = int(r.size()); add(r, idle(12));
