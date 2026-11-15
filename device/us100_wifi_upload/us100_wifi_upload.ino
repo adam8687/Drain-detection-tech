@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include "secrets.h"
+#include "drain_activity.h"
 
 // Serial output costs time: a USB serial print can block once its buffer fills with nothing reading it, and set-up
 // waits for a monitor to attach. The build is therefore silent and the messages below compile to nothing. For a
@@ -30,7 +31,8 @@
 // scripts generate it from device/wifi/.env using the same bench pin mapping.
 HardwareSerial uartA(1);
 Preferences state;
-String pendingUrl, pendingBody;
+String pendingUrl, pendingBody, pendingJournal;
+DrainActivity activity;  // decides when a finished drain should be uploaded at once
 bool stopped = false, recoveredRun = false;
 int64_t epochMs = 0, startUs = 0;
 uint32_t lastAttempt = 0, lastSample = 0;
@@ -112,14 +114,13 @@ String timestamp() {
   return String(out);
 }
 
-// Journal format: line 1 = URL, then one measurement JSON per line. Appending a
-// line never rewrites earlier readings, so a power loss can only tear the newest
-// (not yet uploaded) line, which recovery ignores.
-bool journalPoint(const String& point, bool firstOfBatch) {
-  File file = FFat.open("/pending.txt", firstOfBatch ? "w" : "a");
+// Journal format: line 1 = URL, then one measurement JSON per line. The batch is built in memory and written once, when it
+// is complete and about to upload: one flash write per batch instead of one per reading. A power loss can lose only the
+// readings of the batch still being collected (a few seconds), never a batch that is already queued for upload.
+bool writeJournal() {
+  File file = FFat.open("/pending.txt", "w");
   if (!file) return false;
-  const String data = (firstOfBatch ? pendingUrl + "\n" : String("")) + point + "\n";
-  const bool written = file.print(data) == data.length();
+  const bool written = file.print(pendingJournal) == pendingJournal.length();
   file.flush(); file.close();
   return written;
 }
@@ -229,6 +230,7 @@ void loop() {
     lastSample = millis();
     const String time = timestamp();
     const Reading a = readSensor(D1, D0, uartA);
+    const bool drainEnded = activity.update(a.distanceMm);  // failed readings are -1 and change nothing
     const String point = String("{\"reading_id\":\"") + newId() + "\",\"timestamp\":\"" + time
       + "\",\"sensor\":" + sensorJson(a) + "}";
     const bool firstOfBatch = pendingBody.isEmpty();
@@ -240,8 +242,11 @@ void loop() {
       pendingBody += "," + point + "]}";
     }
     batchCount++;
-    if (!journalPoint(point, firstOfBatch)) { stop("Could not persist the point; upload stopped."); return; }
-    if (batchCount < BATCH_SIZE) return;
+    if (firstOfBatch) pendingJournal = pendingUrl + "\n" + point + "\n"; else pendingJournal += point + "\n";
+    // A batch uploads when it is full, or at once when a drain has just ended (the sink is dry, so pausing to upload
+    // loses nothing and the result reaches the app in about a second instead of waiting for the batch to fill).
+    if (batchCount < BATCH_SIZE && !drainEnded) return;
+    if (!writeJournal()) { stop("Could not persist the batch; upload stopped."); return; }
     batchReady = true;
   }
   const uint32_t elapsed = millis() - lastAttempt;
@@ -271,7 +276,7 @@ void loop() {
       stop("Unexpected acknowledgement; saved point retained for review."); return;
     }
     if (!FFat.remove("/pending.txt")) { stop("Could not clear acknowledged point. Restart to retry safely."); return; }
-    pendingBody = ""; pendingUrl = ""; batchCount = 0; batchReady = false;
+    pendingBody = ""; pendingUrl = ""; pendingJournal = ""; batchCount = 0; batchReady = false;
     LOG_F("Saved batch in Supabase. (%u ms, RSSI %d dBm)\n", (unsigned)postMs, WiFi.RSSI());
     if (finished) stop("Recording finished. Create the next recording and update SENSOR_RECORD_ID.");
   } else if (code <= 0 || code == 408 || code == 429 || code >= 500) {
