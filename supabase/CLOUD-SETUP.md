@@ -168,8 +168,7 @@ each completed drain is also saved once as a small row (about 100 bytes), and `G
 160 points for 1D, 1W, 1M, 3M, 1Y or All (the drains themselves when there are few, otherwise min/average/max per
 time bucket). No screen uses it yet; a chart for it should be added only as the design specifies. Drains finished before this migration are not backfilled.
 
-Known limits: the board makes one HTTPS
-upload of 10 readings every ~5 s (about 520,000 function invocations per unit per month). The board still takes a reading every 0.5 s; the server counts a reading as current for 12 s so the live view and checks tolerate the batch interval. Lower `BATCH_SIZE` in the sketch for a faster live view (the server accepts up to 20 readings per upload).
+Known limits: the board makes one HTTPS upload of 10 readings every ~5 s (about 520,000 function invocations per unit per month), plus one at once when a drain ends. It learns the idle distance from recent quiet readings, so no calibration is needed, and the server still judges the drain from the readings. Readings are written to flash once per batch, so a power cut can lose only the few seconds of the batch being collected. The board still takes a reading every 0.5 s; the server counts a reading as current for 12 s so the live view and checks tolerate the batch interval. Lower `BATCH_SIZE` in the sketch for a faster live view (the server accepts up to 20 readings per upload).
 
 ## Checks
 
