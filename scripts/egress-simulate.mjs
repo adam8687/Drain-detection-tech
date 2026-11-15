@@ -8,9 +8,21 @@ const {profiledCalibration}=await import(root+'backend/tests/helpers/drainage-fi
 const HOURS=Number(process.env.HOURS||1),UNITS=Number(process.env.UNITS||1),USE_PROFILE=true;
 // ---- fake PostgREST that counts bytes it returns
 const rows=[],bytes={header:0,full:0,list_header:0,rpc:0,delta:0},calls={header:0,full:0,list_header:0,rpc:0,delta:0};
+let writeRequestBytes=0,fullWriteRequestBytes=0;
 const fetcher=async(url,o={})=>{
  const q=new URL(url),method=o.method||'GET';
+ if(q.pathname.endsWith('/rpc/update_drain_record_incremental')){
+  if(process.env.NO_INCREMENTAL_WRITES)return new Response('{}',{status:404});
+  const {p_record_id,p_revision,p_expected,p_changes}=JSON.parse(o.body),row=rows.find(r=>r.record_id===p_record_id);
+  if(!row||String(row.revision)!==p_revision||!Object.entries(p_expected).every(([k,v])=>isDeepStrictEqual(row[k],v)))return Response.json([]);
+  const {append_measurements,...changes}=p_changes;
+  writeRequestBytes+=o.body.length;
+  fullWriteRequestBytes+=JSON.stringify({p_record_id,p_expected:{...p_expected,measurements:row.measurements},p_changes:{...changes,measurements:[...row.measurements,...append_measurements]}}).length;
+  Object.assign(row,structuredClone(changes),{measurements:[...row.measurements,...structuredClone(append_measurements)]});row.revision++;
+  const out=[{record_id:row.record_id,revision:row.revision}];bytes.rpc+=JSON.stringify(out).length;calls.rpc++;return Response.json(out);
+ }
  if(q.pathname.endsWith('/rpc/update_drain_record_compact')){
+  writeRequestBytes+=o.body.length;fullWriteRequestBytes+=o.body.length;
   const {p_record_id,p_expected,p_changes}=JSON.parse(o.body),row=rows.find(r=>r.record_id===p_record_id);
   if(!row||!Object.entries(p_expected).every(([k,v])=>isDeepStrictEqual(row[k],v)))return Response.json([]);
   Object.assign(row,structuredClone(p_changes));row.revision++;const out=[{record_id:row.record_id,revision:row.revision}];bytes.rpc+=JSON.stringify(out).length;calls.rpc++;return Response.json(out);}
@@ -52,7 +64,7 @@ let nextLive=T0,nextFleet=T0,drops=0,fullStops=0;
 const ingestNow=process.env.INGEST_NOW?true:false;
 for(let t=T0;t<stop;t+=500){
  for(const w of writers){w.pending.push(pt(t,depthAt((t-T0)/1000)));
-  if(w.pending.length>=4||(t-T0)%2000===1500){
+  if(w.pending.length>=10){
    const points=w.pending.splice(0);
    try{const prev=await writerStore.get(w.id);const r=D.appendMeasurements(prev,points);if(r.record!==prev)await writerStore.compareAndSet(prev,r.record);}
    catch(e){if(e.code==='record_full'||/5000/.test(e.message)){fullStops++;}else throw e;}}}
@@ -65,4 +77,6 @@ const mb=n=>Math.round(n/1e4)/100;
 const recSize=JSON.stringify(rows.find(r=>r.record_id===units[0].id)).length;
 console.log(JSON.stringify({scenario:{hours:HOURS,units:UNITS},fullStopsFromRecordFull:fullStops,monitoringRowBytes:recSize,monitoringPoints:rows.find(r=>r.record_id===units[0].id).measurements.length,
  egressMB:{fullRowReads:mb(bytes.full),headerReads:mb(bytes.header),listHeaders:mb(bytes.list_header),rpcAcks:mb(bytes.rpc),deltaReads:mb(bytes.delta),TOTAL:mb(bytes.full+bytes.header+bytes.list_header+bytes.rpc+bytes.delta)},
- calls,perDayMB_x24:mb((bytes.full+bytes.header+bytes.list_header+bytes.rpc+bytes.delta)*24/HOURS)}));
+ calls,databaseWriteRequestsMB:{actual:mb(writeRequestBytes),equivalentFullArrays:mb(fullWriteRequestBytes)},
+ perDayMB_x24:fullStops?null:mb((bytes.full+bytes.header+bytes.list_header+bytes.rpc+bytes.delta)*24/HOURS),
+ modelOnly:'Nominal 10-point batches; excludes upload delays and drain-end flushes. No rollover simulation; daily extrapolation omitted when the recording fills. Write request bytes are not billed egress.'}));

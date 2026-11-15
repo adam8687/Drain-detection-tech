@@ -140,6 +140,13 @@ Wait for pending old-format uploads to be acknowledged, stop the old uploaders, 
 
 ### Reducing Supabase egress
 
+The lossless optimization release adds incremental database writes, single-pass
+monitoring batches, bounded graph computation and recoverable lifetime event
+summaries. It preserves every reading and the current calibration/alert behavior.
+See [data efficiency and deployment](docs/data-efficiency.md), including the new
+SQL migration and the operator-only history reconciliation tool. Idle summaries
+and automatic data deletion are not enabled.
+
 The browser requests new graph readings after its cursor, with a maximum 120-point snapshot for recovery. Empty sinks refresh every 15 seconds and active water every three seconds; full stored history and finished-record replay remain available. Fleet summaries refresh every 30 seconds, live-page selectors every 60 seconds. Hidden-page polling pauses. Installer tools mount only when opened and use the same bounded live responses.
 
 The database adapter checks small revision headers before downloading a recording. An unchanged history is reused from a bounded 16 MiB worker cache; external writes increment the database revision and invalidate it. Atomic writes return only record ID/revision through `update_drain_record_compact`, rather than returning the full growing history again. Cache eviction/cold workers still fetch the full row once. Firmware samples one sensor at 2 Hz instead of 10 Hz.

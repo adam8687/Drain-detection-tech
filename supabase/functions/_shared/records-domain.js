@@ -356,15 +356,19 @@ export function setupGuidance(record, now = Date.now()) {
   if (level < target) return reply('add_water',`Put the plug in and run the tap gently. Aim for about ${target} mm of water, well below the rim.`,level);
   return reply('water_ready','Enough water. Turn the tap off, keep the plug in, then start the drain test.',level);
 }
-export function computedView(record, sample = null) {
+export function computedView(record, sample = null, seriesStart = 0) {
   const rows = ordered(record.measurements);
   const position = sample === null ? rows.length - 1 : Math.min(sample, rows.length - 1);
   const visible = rows.slice(0, position + 1);
   const stale = record.recording_status === 'recording' && (!rows.length || Date.now() - Date.parse(rows.at(-1).timestamp) > 15000);
   const result = forecast(visible, record.calibration, stale && sample === null);
   const first = rows[0]?.timestamp;
-  const timeline = visible.map((p, i) => ({ elapsed_seconds: (Date.parse(p.timestamp) - Date.parse(first)) / 1000, seconds_remaining: forecast(visible.slice(Math.max(0, i - 7), i + 1), record.calibration).seconds_remaining }));
-  const water_levels = visible.map((point, index) => {
+  // Only display-series work is bounded. Forecasts, calibration and drain detection
+  // still see the original evidence, including the seven points before the window.
+  const series = visible.slice(seriesStart);
+  const timeline = series.map((p, offset) => { const i = seriesStart + offset; return { elapsed_seconds: (Date.parse(p.timestamp) - Date.parse(first)) / 1000, seconds_remaining: forecast(visible.slice(Math.max(0, i - 7), i + 1), record.calibration).seconds_remaining }; });
+  const water_levels = series.map((point, offset) => {
+    const index = seriesStart + offset;
     const values = depths(point, record.calibration);
     const gap_before = index > 0 && Date.parse(point.timestamp) - Date.parse(visible[index - 1].timestamp) > SETTINGS.maxGap;
     return { elapsed_seconds: (Date.parse(point.timestamp) - Date.parse(first)) / 1000, depth_mm: values?.[0] ?? null, gap_before };
@@ -378,6 +382,22 @@ export function computedView(record, sample = null) {
 // Applies points in order inside one atomic update. Points arriving after the
 // recording completes (calibration/drainage reaching its result) are dropped.
 export function appendMeasurements(record, points) {
+  // Monitoring never auto-finishes, so validate a batch once and order it once.
+  // Calibration/drainage retain sequential processing and their exact stop point.
+  if (record.record_type === 'monitoring') {
+    const byId = new Map(record.measurements.map(p => [p.reading_id,p])), added=[];
+    for (const point of points) {
+      const existing = byId.get(point.reading_id);
+      if (existing) {
+        if (!isDeepStrictEqual(existing,point)) fail('reading_id was reused with different measurements',409,'reading_conflict');
+        continue;
+      }
+      if (record.recording_status !== 'recording') fail('Recording is finished; start a new record',409,'record_finished');
+      if (byId.size >= SETTINGS.maxMeasurements) fail('Recording reached 5000 samples; finish it and start another',409,'record_full');
+      byId.set(point.reading_id,point);added.push(point);
+    }
+    return added.length ? {record:{...record,measurements:ordered([...record.measurements,...added])},duplicate:false} : {record,duplicate:true};
+  }
   let current = record, duplicate = true; const wasRecording = record.recording_status === 'recording';
   for (const point of points) {
     if (wasRecording && current.recording_status !== 'recording') break;
@@ -408,11 +428,12 @@ export function appendMeasurement(record, point) {
 export function boundedRecordView(record, sample = null, window = null, after = null) {
   if (window !== null && (!Number.isInteger(window) || window < 1 || window > 500)) fail('window must be an integer from 1 to 500');
   if(after!==null){uuid(after,'after');if(window===null||sample!==null)fail('after requires window and cannot be combined with replay');}
-  const computed = computedView(record, sample);
-  if (window === null) return {record,computed};
-  const visible=ordered(record.measurements).slice(0,computed.sample_index+1);
+  if (window === null) return {record,computed:computedView(record,sample)};
+  const rows=ordered(record.measurements);
+  const visible=rows.slice(0,sample === null ? rows.length : Math.min(sample+1,rows.length));
   const index=after===null?-1:visible.findIndex(p=>p.reading_id===after);
   const start=index<0?Math.max(0,visible.length-window):Math.max(index+1,visible.length-window);
+  const computed = computedView(record, sample, start);
   const series_mode=index<0?'replace':'append';
-  return {record:{...record,measurements:visible.slice(start)},computed:{...computed,series_mode,timeline:computed.timeline.slice(start),water_levels:computed.water_levels.slice(start)}};
+  return {record:{...record,measurements:visible.slice(start)},computed:{...computed,series_mode}};
 }

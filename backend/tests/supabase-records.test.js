@@ -12,6 +12,8 @@ function fixture() {
     assert.equal(options.cache, 'no-store'); assert.equal(options.headers.apikey, 'sb_secret_fixture');
     if (unavailable) throw Error('offline');
     const query = new URL(url), method = options.method || 'GET';
+    // This fixture models an older deployment; writes must remain compatible.
+    if (query.pathname.endsWith('/rpc/update_drain_record_incremental')) return new Response('{}', {status:404});
     if (query.pathname.endsWith('/rpc/update_drain_record_compact')) {
       assert.equal(method, 'POST'); assert.ok(url.length < 200);
       if (rejectWrites) return new Response('{}', { status: 503 });
