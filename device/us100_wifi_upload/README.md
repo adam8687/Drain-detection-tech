@@ -1,5 +1,11 @@
 # US-100 uploads over Wi-Fi (Arduino Nano ESP32)
 
+**Live-mode update:** the current sketch follows its own active setup recording,
+samples independently of uploads, and switches between ten-point batches and
+individual uploads using temporary server leases. The fixed-record instructions
+below describe the older bench workflow. For the current deployment requirements,
+restart policy and unsent-reading archives, see [live mode](../../docs/live-mode.md).
+
 **Recommended:** use [direct Supabase cloud setup](../../supabase/CLOUD-SETUP.md)
 to collect without a Mac backend. This firmware supports that hosted HTTPS path.
 

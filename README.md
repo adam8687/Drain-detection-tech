@@ -140,6 +140,11 @@ Wait for pending old-format uploads to be acknowledged, stop the old uploaders, 
 
 ### Reducing Supabase egress
 
+Live mode can now be requested temporarily from the live unit page and is enabled
+automatically during setup. It waits for device confirmation and expires safely;
+normal monitoring still uses batches. See [live-mode setup and validation](docs/live-mode.md)
+for the required database migration, firmware update and physical-testing limits.
+
 The lossless optimization release adds incremental database writes, single-pass
 monitoring batches, bounded graph computation and recoverable lifetime event
 summaries. It preserves every reading and the current calibration/alert behavior.

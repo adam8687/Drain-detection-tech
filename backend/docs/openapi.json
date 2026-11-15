@@ -516,6 +516,99 @@
         }
       }
     },
+    "/api/v1/devices/{device_id}/live-mode": {
+      "get": {
+        "summary": "Owner-only temporary live-mode status; active only after device confirmation",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Owner-only 120-second independent live session; disabling only releases this session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "session_id",
+                  "enabled",
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "enum": [
+                      "demo",
+                      "calibration"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "summary": "List fixtures visible to the signed-in user",

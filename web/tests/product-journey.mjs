@@ -40,7 +40,7 @@ const profiles=[
  {name:'firefox-desktop',engine:firefox,options:{viewport:{width:1365,height:900}}},
 ];
 async function journey(profile,index){
- let browser,context,page;const checks=[];const errors=[];const injectedFailurePaths=new Set();const authRedirects={};const fixture=`product-${index}`;let sensorKey;let credentialRequests=0;let offline=false;let streamTimer;let streamWork=Promise.resolve();
+ let browser,context,page;const checks=[];const errors=[];const injectedFailurePaths=new Set();const authRedirects={};const fixture=`product-${index}`;let sensorKey;let sensorLive=false;let credentialRequests=0;let offline=false;let streamTimer;let streamWork=Promise.resolve();
  try {
   browser=await profile.engine.launch({...((profile.engine===chromium && process.env.CHROME_PATH)?{executablePath:process.env.CHROME_PATH}:{}),headless:true,timeout:20000});
   context=await browser.newContext({...profile.options,reducedMotion:'reduce'});
@@ -78,7 +78,7 @@ async function journey(profile,index){
     }
     throw Error(`Device did not receive an active ${expected||'setup'} recording`);
   };
-  const append=async(points,expected)=>{const row=await active(expected);for(const point of points){const res=await fetch(`${backend}/api/v1/records/${row.record_id}/measurements`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${sensorKey}`},body:JSON.stringify(point)});assert.equal(res.status,201,await res.text());}};
+  const append=async(points,expected)=>{const row=await active(expected);for(const point of points){const res=await fetch(`${backend}/api/v1/records/${row.record_id}/measurements`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${sensorKey}`,'X-Drain-Live-Capability':'1','X-Drain-Live-Active':sensorLive?'1':'0'},body:JSON.stringify(point)});sensorLive=Number(res.headers.get('x-drain-live-for-ms'))>0;assert.equal(res.status,201,await res.text());}};
   await page.goto(origin+'/add-unit');
   await check('signed-out setup explains sign-in',()=>page.getByText('Sign in to register sensors to your account.',{exact:false}).waitFor());
   await page.getByLabel('Company name',{exact:true}).fill('Product Test Company');await page.getByLabel('Work email',{exact:true}).fill('owner@example.test');await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByLabel('Repeat password',{exact:true}).fill('test-password');
@@ -105,6 +105,7 @@ async function journey(profile,index){
   await page.getByRole('button',{name:'Start connection test'}).click();await page.reload();
   await check('refresh recovers active connection test',()=>page.getByRole('heading',{name:`Connect ${fixture}`}).waitFor());
   await append([sample(Date.now(),0,true)]);await check('one failed sensor prevents continuing',async()=>{await page.getByText('Check the sensor',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
+  await check('setup waits for the device to confirm live delivery',async()=>{const r=await fetch(`${backend}/api/v1/devices/${fixture}/live-mode`,{headers:{authorization:`Bearer ${token}`}});const state=await r.json();assert.equal(state.requested,true);assert.equal(state.active,false);assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
   await append([sample(Date.now())]);await page.getByRole('button',{name:'Continue',exact:true}).click();
   await page.getByLabel('The sink is empty',{exact:false}).check();await page.getByRole('button',{name:'Record empty sink',exact:false}).click();
   await append(Array.from({length:20},(_,i)=>sample(Date.now()-30000+i*500,i%2?14:0)),'calibration');
@@ -133,10 +134,13 @@ async function journey(profile,index){
   await page.screenshot({path:`${output}/${profile.name}-calibration-ready.png`,fullPage:true});
   await page.getByRole('button',{name:'Start monitoring',exact:true}).click();await page.waitForURL('**/live-demo?**');await page.getByText('Empty reference saved. Watching for water.',{exact:true}).first().waitFor();await layout('live-monitoring');
   await check('owner can save email preferences while sender setup is pending',async()=>{const checkbox=page.getByLabel('Email me when drainage takes unusually long',{exact:true});await checkbox.check();await page.getByText('Email preference saved.',{exact:true}).waitFor();await page.getByText('Email delivery is being set up.',{exact:false}).waitFor();});
+  await check('live demo waits for a real device acknowledgment',async()=>{await page.getByRole('switch',{name:'Live demo',exact:true}).check();await page.getByText('Starting live view…',{exact:true}).waitFor();await append([sample(Date.now()),sample(Date.now()+1)]);await page.getByText('Live · fast updates confirmed',{exact:true}).waitFor();});
+
   await check('hidden live page pauses refresh requests',async()=>{
     await page.waitForTimeout(500);let count=0;const countRequest=req=>{if(req.url().includes('/api/backend/'))count++;};
-    await page.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,get:()=>true}));await page.waitForTimeout(500);page.on('request',countRequest);await page.waitForTimeout(3500);page.off('request',countRequest);assert.equal(count,0);await page.evaluate(()=>delete document.hidden);
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});await page.waitForTimeout(500);page.on('request',countRequest);await page.waitForTimeout(3500);page.off('request',countRequest);assert.equal(count,0);assert.equal(app.store.db.prepare("SELECT count(*) AS n FROM drain_live_sessions WHERE fixture_id=? AND reason='demo' AND expires_at>?").get(fixture,Date.now()).n,0,'the hidden page releases its own demo lease');await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
   });
+  await check('switching live demo off restores normal updates',async()=>{await page.getByRole('switch',{name:'Live demo',exact:true}).uncheck();await page.getByText('Normal updates · readings arrive in batches.',{exact:true}).waitFor();});
   offline=true;await check('network outage is visible',()=>page.getByRole('alert').filter({hasText:'Connection lost'}).waitFor({timeout:30000}));offline=false;
   await append(Array.from({length:66},(_,i)=>sample(Date.now()-65000+i*1000,50)));
   streamTimer=setInterval(()=>{streamWork=streamWork.then(()=>append([sample(Date.now(),50)],'monitoring'));},500);

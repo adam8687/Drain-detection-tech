@@ -1,4 +1,5 @@
 export type DataSource = 'sensor' | 'simulation';
+export interface LiveModeState {requested:boolean;active:boolean;capable:boolean;expires_at:string|null;remaining_ms:number;server_now:string}
 export type RecordType = 'calibration' | 'drainage' | 'monitoring';
 export interface DrainageCapture {capture_id:string;recording_id:string;from_reading_id:string;confirmed_at:string;tap_off_confirmed:true;clear_drain_confirmed:true}
 export interface DrainageBand {from_depth_mm:number;to_depth_mm:number;duration_seconds:number}
@@ -38,6 +39,9 @@ export class DrainApi {
   }
   register(device_id: string, name: string) { return this.request<{device_id: string}>('/devices', 'POST', {device_id, name}); }
   devices(signal?: AbortSignal) { return this.request<{ devices: { device_id: string; name: string }[] }>('/devices', 'GET', undefined, signal); }
+  liveMode(fixture:string,signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'GET',undefined,signal);}
+  setLiveMode(fixture:string,session_id:string,enabled:boolean,reason:'demo'|'calibration',signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'POST',{session_id,enabled,reason},signal);}
+  releaseLiveMode(fixture:string,session_id:string,reason:'demo'|'calibration'){return this.fetcher(`${this.baseUrl}/api/v1/devices/${encodeURIComponent(fixture)}/live-mode`,{method:'POST',keepalive:true,cache:'no-store',headers:{'Content-Type':'application/json',...(this.token?{Authorization:`Bearer ${this.token}`}:{})},body:JSON.stringify({session_id,enabled:false,reason})});}
   recordSummaries(source: DataSource, signal?: AbortSignal) { return this.request<{ records: RecordSummary[] }>(`/records?data_source=${source}&limit=200`, 'GET', undefined, signal); }
   createDeviceKey(id: string) { return this.request<{device_id: string; key: string}>(`/devices/${encodeURIComponent(id)}/keys`, 'POST', {}); }
   calibrationRecords(fixture:string,source:DataSource,signal?:AbortSignal){return this.request<{records:RecordSummary[]}>(`/records?fixture_id=${encodeURIComponent(fixture)}&data_source=${source}&record_type=calibration&recording_status=finished&limit=200`,'GET',undefined,signal);}
