@@ -49,7 +49,7 @@ try {
     const web=parseEnv(await text('web/.env.cloud.local'));
     if(!web.SUPABASE_FUNCTION_URL) throw Error('Run cloud:deploy then cloud:configure first.');
     // Start only the frontend. Server credentials/admin tokens are not passed to it.
-    const clean={...process.env};for(const key of ['SUPABASE_SECRET_KEY','API_KEY','OWNER_TOKEN','DRAIN_ADMIN_TOKEN','DRAIN_SERVICE_KEY']) delete clean[key];
+    const clean={...process.env};for(const key of ['SUPABASE_SECRET_KEY','API_KEY','OWNER_TOKEN','DRAIN_ADMIN_TOKEN','DRAIN_SERVICE_KEY','RESEND_API_KEY','TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN','TWILIO_FROM_NUMBER','TWILIO_MESSAGING_SERVICE_SID','DRAIN_EMAIL_WORKER_TOKEN','SUPABASE_ACCESS_TOKEN']) delete clean[key];
     const wifi=parseEnv(await text('device/wifi/.env'));
     const child=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--port',wifi.WEB_PORT||'3000'],{cwd:fileURLToPath(location('web/')),stdio:'inherit',env:{...clean,...web}});
     child.on('error',()=>{console.error('Cannot start frontend. Run npm --prefix web ci.');process.exitCode=1;});

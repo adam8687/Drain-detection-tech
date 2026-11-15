@@ -24,3 +24,14 @@ Optional environment variables:
 A passing run verifies the software flows. Physical US-100 readings under splashing, foam, differing fixture shapes, Wi-Fi setup, uninterrupted operation beyond the existing 5000-sample monitoring window, and external email delivery need separate validation or implementation.
 
 On this Mac, Firefox cannot launch its renderer (sandbox/SWGL initialization error); it has not been verified. The other seven profiles are runnable with the documented profile filter.
+
+Focused notification settings check (uses the isolated `.next-product-test` build
+created by `test:product`, with its mock identity settings):
+
+```sh
+CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' node tests/notification-settings.mjs
+```
+
+This checks email opt-in, SMS consent and phone persistence across reloads,
+independent SMS opt-out, and page width at 1440px and 320px. Provider calls remain
+disabled and no live customer data is used. Screenshots go to `/tmp/drain-sms-ui`.

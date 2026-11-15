@@ -8,9 +8,9 @@ Routes: `/`, `/dashboard`, `/heat-map`, `/live-demo`, `/add-unit`, `/alerts`, `/
 
 `/add-unit` checks one sensor, saves 20 stable empty-sink samples over at least eight seconds, and offers Start monitoring. No practice drains or running water are needed. Fixture URLs recover setup after refresh, and failed restores block actions until recovered. Historical dual-sensor calibration is not reused; the device needs a fresh empty check.
 
-Live views use the backend's one-sensor water-depth curve, forecasts, gap markers and drain-cycle summaries. The empty baseline and learned usual drain time are distinct. Initial thresholds are 30 seconds for slowing and 60 seconds for water still present; usable comparable drain times can refine these later during normal use. Owner email preferences and server-side email delivery are implemented; the sender is not activated. SMS is not implemented.
+Live views use the backend's one-sensor water-depth curve, forecasts, gap markers and drain-cycle summaries. The empty baseline and learned usual drain time are distinct. Initial thresholds are 30 seconds for slowing and 60 seconds for water still present; usable comparable drain times can refine these later during normal use. Owner email and SMS preferences and server-side delivery are implemented. Email uses the verified account address through Resend; SMS uses an explicitly opted-in phone number through Twilio. Provider activation requires private server credentials.
 
-Live pages request new readings after a cursor and recover using a 120-point snapshot; empty sinks refresh every 15 seconds and active/uncertain readings every three seconds; selector history refreshes every 60 seconds, fleet every 30 seconds. Hidden tabs pause polling. Finished recordings stop polling, and full replay remains available in Installer tools. Full measurement counts and elapsed-time origins are preserved in bounded responses. Apply `supabase/migrations/202611120001_single_sensor.sql` and `supabase/migrations/202611120002_email_notifications.sql` and deploy the corresponding backend/Edge Function with this frontend.
+Live pages request new readings after a cursor and recover using a 120-point snapshot; empty sinks refresh every 15 seconds and active/uncertain readings every three seconds; selector history refreshes every 60 seconds, fleet every 30 seconds. Hidden tabs pause polling. Finished recordings stop polling, and full replay remains available in Installer tools. Full measurement counts and elapsed-time origins are preserved in bounded responses. Apply `supabase/migrations/202611120001_single_sensor.sql` and `supabase/migrations/202611120002_email_notifications.sql` and `supabase/migrations/202611150001_sms_notifications.sql`, then deploy the corresponding backend/Edge Function with this frontend.
 
 `npm run test:product` runs isolated consumer journeys; see `tests/README.md`. Simulated identity/readings never use live Supabase accounts or hardware.
 
@@ -22,7 +22,7 @@ Current prototype hardware still needs installer-side provisioning before handof
 
 Browser journeys provision their simulated sensor through an installer-side backend request, outside the customer browser, and assert that no customer page fetches a device key or asks for configuration commands.
 
-Signup confirmation returns to `/login`, password recovery to `/reset-password`. New customer deployments leave `DRAIN_ENABLE_BENCH_VIEWER=false`. Email settings stay owner-only; disabled delivery is shown explicitly. See the Supabase README for the provisional email policy, verified-sender setup and outbox retry configuration.
+Signup confirmation returns to `/login`, password recovery to `/reset-password`. New customer deployments leave `DRAIN_ENABLE_BENCH_VIEWER=false`. Email and SMS settings stay owner-only; disabled delivery is shown explicitly. See the Supabase README for the provisional email policy, verified-sender setup and outbox retry configuration.
 
 ## Deploying on Vercel
 

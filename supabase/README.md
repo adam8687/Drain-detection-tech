@@ -67,3 +67,61 @@ The empty-sink reference remains the only onboarding baseline. A single distance
 After ten earlier comparable completed uses at a starting depth within 25%, email timing uses the maximum of 60 seconds, 3× median duration, median+30 seconds, and `median + 3.5 × MAD / 0.6745`. The robust term follows [NIST's modified z-score outlier guidance](https://www.itl.nist.gov/div898/handbook/eda/section3/eda35h.htm). Ten samples, depth tolerance, floors, multipliers and the learning fallback are application engineering choices, not NIST plumbing recommendations. Uses lasting 120 seconds or longer are excluded from learning so obviously slow history cannot train the initial email limit. The earliest 50 compact completed-use references persist across recording windows; full histories are not re-downloaded to learn an email threshold. Validate these settings on actual fixtures before treating them as operational limits.
 
 Simulation, historical dual-sensor captures, stale readings, missing echoes and sampling gaps cannot generate a live standing-water email. The email asks the owner to check the tap, plug and drain; it does not assert that a clog has been diagnosed.
+
+## Owner email and Twilio SMS
+
+Apply `migrations/202611150001_sms_notifications.sql` after the existing email migration.
+The update preserves email settings, old outbox rows and all sensor data. Both Node
+and Edge use the same provider logic. Owners choose each channel independently in
+**Email and SMS alerts** on the live unit page. Email always targets the current
+owner's verified account address; owners enter their SMS number in international
+format and explicitly consent to automated alerts. Viewers and sensor keys cannot
+read or change the phone number. Disabling a channel or changing its recipient
+cancels queued messages at delivery time. Removing ownership prevents both channels.
+
+Operator preparation, using the existing linked Supabase project and CLI login:
+
+```bash
+npm run notifications:setup                 # shows readiness, no live changes
+npm run notifications:setup -- --apply      # additive schema, Edge deploy, Vault and retry schedule
+```
+
+Before activation, privately fill `backend/.env` with `RESEND_API_KEY`,
+`DRAIN_EMAIL_FROM` (verified sender), `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
+and either `TWILIO_FROM_NUMBER` (SMS-capable) or `TWILIO_MESSAGING_SERVICE_SID`
+(with an SMS sender). Keep `DRAIN_APP_URL` set to the HTTPS production frontend.
+Then run `npm run notifications:setup -- --apply --activate`. This copies only
+notification settings into the ignored private cloud file, sets function secrets,
+deploys the shared provider logic, and configures the existing purpose-scoped retry
+worker. The worker token is generated automatically and kept in private files and
+Supabase Vault. Do not put any provider credential in browser variables.
+The frontend changes must be deployed through the existing frontend hosting workflow.
+
+To activate a single configured channel, use `--activate-sms` or `--activate-email`
+instead of `--activate`. For an already-prepared hosted deployment, add
+`--secrets-only` to update provider settings and verify the worker without
+reapplying schema changes or redeploying other local work. For example:
+`npm run notifications:setup -- --apply --activate-sms --secrets-only`.
+
+The sender must be ready in the provider accounts: a verified Resend domain/sender,
+an SMS-capable Twilio sender, and any sender registration required by Twilio for
+its destination. Trial accounts can restrict recipients. Twilio's Messaging Service
+must have opt-out/help handling configured; STOP remains enforced by Twilio. Never
+bypass a provider opt-out by automatically changing the sender.
+See [Twilio Messages](https://www.twilio.com/docs/messaging/api/message-resource)
+and [Resend sending](https://resend.com/docs/api-reference/emails/send-email).
+
+Each channel shares the sink's drainage threshold but gets its own event deduplication
+and one-hour cooldown. A provider acknowledgment records acceptance, not confirmed
+handset/inbox delivery. Email retries retain an immutable body and Resend idempotency
+key. Twilio rate limits retry with backoff; rejected or ambiguous SMS sends are marked
+failed rather than resent, since the Messages API provides no send idempotency key.
+An expired in-progress SMS lease is also marked failed to avoid duplicate texts after
+a worker crash. This can lose an alert if the crash happened before the send. Expired
+jobs are discarded after 23 hours. Delivery status is held in the private outbox;
+provider delivery callbacks and an owner delivery-history UI are not implemented.
+
+Validation: `npm run check`; the browser product journey includes SMS opt-in/reload.
+`PGLITE_MODULE_PATH=/path/to/@electric-sql/pglite/dist/index.js node supabase/tests/sms-notifications.mjs`
+checks PostgreSQL migration preservation, repeatability, channel claims, cooldowns,
+phone constraints and access restrictions.

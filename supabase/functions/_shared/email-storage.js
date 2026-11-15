@@ -5,7 +5,7 @@ export class SupabaseEmailStore{
  async references(fixture){return this.request(`drain_email_references?fixture_id=eq.${encodeURIComponent(fixture)}&select=fixture_id,cycle_id,started_at,depth_mm,duration_seconds&order=started_at.asc&limit=50`);}
  async preference(fixture,user){return(await this.request(`drain_email_preferences?fixture_id=eq.${encodeURIComponent(fixture)}&user_id=eq.${encodeURIComponent(user)}&select=*&limit=1`))[0]??null;}
  async savePreference(p){await this.request('drain_email_preferences?on_conflict=fixture_id,user_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(p)});}
- async claim(limit){return this.request('rpc/claim_drain_emails',{method:'POST',body:JSON.stringify({p_limit:limit})});}
+ async claim(limit,channels=['email']){return this.request('rpc/claim_drain_notifications',{method:'POST',body:JSON.stringify({p_limit:limit,p_channels:channels})});}
  async seal(job,recipient,payload){await this.request('rpc/update_drain_email',{method:'POST',body:JSON.stringify({p_id:job.id,p_lease:job.lease_token,p_action:'seal',p_values:{recipient,payload}})});}
  async finish(job,status,provider_id=null){await this.request('rpc/update_drain_email',{method:'POST',body:JSON.stringify({p_id:job.id,p_lease:job.lease_token,p_action:status,p_values:{provider_id}})});}
  async retry(job){await this.request('rpc/update_drain_email',{method:'POST',body:JSON.stringify({p_id:job.id,p_lease:job.lease_token,p_action:'retry',p_values:{}})});}

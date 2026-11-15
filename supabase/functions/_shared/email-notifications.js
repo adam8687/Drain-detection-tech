@@ -35,42 +35,65 @@ export function emailCandidates(record,context=[record],now=Date.now(),reference
   return[{event_key:createHash('sha256').update(`${EMAIL_POLICY.version}:${record.fixture_id}:${record.record_id}:${event.record_id}`).digest('hex'),fixture_id:record.fixture_id,record_id:record.record_id,elapsed_seconds:elapsed,threshold_seconds:policy.seconds,reference_count:policy.reference_count,usual_seconds:policy.usual_seconds,observed_at:last.timestamp,completed,policy_version:EMAIL_POLICY.version}];
  });
 }
+const phonePattern=/^\+[1-9]\d{7,14}$/;
 export function providerConfiguration(env={}){
  const apiKey=env.RESEND_API_KEY||'',from=env.DRAIN_EMAIL_FROM||'',appUrl=env.DRAIN_APP_URL||'';
- let valid=false;try{valid=new URL(appUrl).protocol==='https:'&&/^([^<>\r\n]+ <)?[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>?$/.test(from);}catch{}
- return{apiKey,from,appUrl,enabled:env.DRAIN_EMAIL_ENABLED==='true'&&Boolean(apiKey)&&valid};
+ let valid=false;try{valid=new URL(appUrl).protocol==='https:';}catch{}
+ const emailEnabled=env.DRAIN_EMAIL_ENABLED==='true'&&Boolean(apiKey)&&valid&&/^([^<>\r\n]+ <)?[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>?$/.test(from);
+ const sms={accountSid:env.TWILIO_ACCOUNT_SID||'',authToken:env.TWILIO_AUTH_TOKEN||'',from:env.TWILIO_FROM_NUMBER||'',messagingServiceSid:env.TWILIO_MESSAGING_SERVICE_SID||''};
+ sms.enabled=env.DRAIN_SMS_ENABLED==='true'&&valid&&/^AC[0-9a-fA-F]{32}$/.test(sms.accountSid)&&Boolean(sms.authToken)&&(phonePattern.test(sms.from)||/^MG[0-9a-fA-F]{32}$/.test(sms.messagingServiceSid));
+ return{apiKey,from,appUrl,emailEnabled,sms,enabled:emailEnabled||sms.enabled};
 }
 export function createEmailNotifications({config,deliveryStore,accessStore,userEmail,fetcher=fetch,logger=()=>{}}){
+ const emailEnabled=config.emailEnabled??config.enabled,smsEnabled=config.sms?.enabled??false;
+ const channels=[...(emailEnabled?['email']:[]),...(smsEnabled?['sms']:[])];
  let flushing=null,lastKick=0;const references=new Map();
- const service={enabled:config.enabled,deliveryStore,
+ const service={enabled:channels.length>0,deliveryStore,
   async references(fixture){const hit=references.get(fixture);if(hit&&hit.expires>Date.now())return hit.rows;const rows=await deliveryStore.references(fixture);references.set(fixture,{rows,expires:Date.now()+30000});while(references.size>128)references.delete(references.keys().next().value);return rows;},
-  async preference(fixture,user){const p=await deliveryStore.preference(fixture,user);return{enabled:p?.enabled??false,threshold_seconds:p?.threshold_seconds??null,provider_configured:config.enabled,learning_threshold_seconds:EMAIL_POLICY.learningSeconds};},
+  async preference(fixture,user){const p=await deliveryStore.preference(fixture,user);return{enabled:p?.enabled??false,threshold_seconds:p?.threshold_seconds??null,provider_configured:emailEnabled,sms_enabled:p?.sms_enabled??false,sms_phone:p?.sms_phone??null,sms_provider_configured:smsEnabled,learning_threshold_seconds:EMAIL_POLICY.learningSeconds};},
   async savePreference(fixture,user,input){
-   if(!input||typeof input.enabled!=='boolean'||Object.keys(input).some(k=>!['enabled','threshold_seconds'].includes(k)))throw Error('Choose whether to enable email alerts.');
+   if(!input||typeof input.enabled!=='boolean'||Object.keys(input).some(k=>!['enabled','threshold_seconds','sms_enabled','sms_phone'].includes(k)))throw Error('Choose whether to enable drainage alerts.');
    const threshold=input.threshold_seconds??null;if(threshold!==null&&(!Number.isInteger(threshold)||threshold<30||threshold>3600))throw Error('Choose a time limit from 30 to 3600 seconds.');
-   await deliveryStore.savePreference({fixture_id:fixture,user_id:user,enabled:input.enabled,threshold_seconds:threshold});return service.preference(fixture,user);
+   if(Object.hasOwn(input,'sms_enabled')&&typeof input.sms_enabled!=='boolean')throw Error('Choose whether to enable SMS alerts.');
+   const previous=await deliveryStore.preference(fixture,user);
+   const smsEnabled=input.sms_enabled??previous?.sms_enabled??false;
+   const phone=input.sms_phone===undefined?previous?.sms_phone??null:input.sms_phone;
+   if(typeof smsEnabled!=='boolean'||phone!==null&&(typeof phone!=='string'||!phonePattern.test(phone))||smsEnabled&&!phone)throw Error('Enter a phone number with country code, such as +15125550123, and choose whether to enable SMS.');
+   await deliveryStore.savePreference({fixture_id:fixture,user_id:user,enabled:input.enabled,threshold_seconds:threshold,sms_enabled:smsEnabled,sms_phone:phone});return service.preference(fixture,user);
   },
   async flush(){
-   if(!config.enabled)return{sent:0,failed:0};if(flushing)return flushing;
-   flushing=(async()=>{let sent=0,failed=0;await Promise.all((await deliveryStore.claim(2)).map(async job=>{
+   if(!service.enabled)return{sent:0,failed:0};if(flushing)return flushing;
+   flushing=(async()=>{let sent=0,failed=0;await Promise.all((await deliveryStore.claim(2,channels)).map(async job=>{
+    const sms=job.channel==='sms';let attempted=false;
     try{
      const membership=(await accessStore.list('device_members',{device_id:job.fixture_id,user_id:job.user_id},1))[0];
      const preference=await deliveryStore.preference(job.fixture_id,job.user_id);
-     const email=membership?.role==='owner'&&preference?.enabled?await userEmail(job.user_id):null;
-     if(!email||job.recipient&&job.recipient!==email){await deliveryStore.finish(job,'cancelled');return;}
-     // Persist an immutable recipient/body before contacting the provider. Retries
-     // use exactly the same payload and provider idempotency key.
+     const recipient=membership?.role!=='owner'?null:sms?(preference?.sms_enabled?preference.sms_phone:null):(preference?.enabled?await userEmail(job.user_id):null);
+     if(!recipient||job.recipient&&job.recipient!==recipient){await deliveryStore.finish(job,'cancelled');return;}
      const event=job.event;
-     const text=`${event.completed?'Slow drainage was measured':'Water is still present'} at ${job.fixture_id}.\nObserved time: ${event.elapsed_seconds.toFixed(1)} seconds.\nEmail limit: ${event.email_threshold_seconds} seconds.\nCheck that the tap is off and the plug is open, then inspect the drain. This is not a confirmed blockage diagnosis.\n\nView your unit: ${config.appUrl.replace(/\/$/,'')}/live-demo?fixture=${encodeURIComponent(job.fixture_id)}&record=${encodeURIComponent(event.record_id)}&source=sensor`;
-     const payload=job.payload??{from:config.from,to:[email],subject:`Drainage needs attention: ${job.fixture_id}`,text};
-     await deliveryStore.seal(job,email,payload);
-     const response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json','Idempotency-Key':`drain/${job.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
-     if(!response.ok)throw Error('Email provider unavailable');const result=await response.json();if(typeof result.id!=='string')throw Error('Invalid provider acknowledgment');
-     await deliveryStore.finish(job,'sent',result.id);sent++;
-    }catch{failed++;await deliveryStore.retry(job).catch(()=>{});logger('Drainage email remains queued for retry.');}
+     const link=`${config.appUrl.replace(/\/$/,'')}/live-demo?fixture=${encodeURIComponent(job.fixture_id)}&record=${encodeURIComponent(event.record_id)}&source=sensor`;
+     const text=`${event.completed?'Slow drainage was measured':'Water is still present'} at ${job.fixture_id}.\nObserved time: ${event.elapsed_seconds.toFixed(1)} seconds.\nAlert limit: ${event.email_threshold_seconds} seconds.\nCheck that the tap is off and the plug is open, then inspect the drain. This is not a confirmed blockage diagnosis.\n\nView your unit: ${link}`;
+     const payload=job.payload??(sms?{To:recipient,Body:`Drain Monitor: ${event.completed?'Slow drainage':'Water still present'} at ${job.fixture_id} (${Math.round(event.elapsed_seconds)}s). Check tap, plug and drain. ${link} Reply STOP to unsubscribe.`,...(config.sms.messagingServiceSid?{MessagingServiceSid:config.sms.messagingServiceSid}:{From:config.sms.from})}:{from:config.from,to:[recipient],subject:`Drainage needs attention: ${job.fixture_id}`,text});
+     // Seal before sending so retries cannot change the destination or content.
+     await deliveryStore.seal(job,recipient,payload);
+     attempted=true;
+     const response=sms?await fetcher(`https://api.twilio.com/2010-04-01/Accounts/${config.sms.accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${btoa(`${config.sms.accountSid}:${config.sms.authToken}`)}`,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(payload).toString(),signal:AbortSignal.timeout(10000)}):await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json','Idempotency-Key':`drain/${job.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
+     if(!response.ok){
+      if(sms){failed++;if(response.status===429)await deliveryStore.retry(job);else await deliveryStore.finish(job,'failed');logger('SMS provider rejected an alert; check notification delivery status.');return;}
+      throw Error('Email provider unavailable');
+     }
+     const result=await response.json(),id=sms?result.sid:result.id;if(typeof id!=='string')throw Error('Invalid provider acknowledgment');
+     await deliveryStore.finish(job,'sent',id);sent++;
+    }catch{failed++;
+     // Twilio Messages has no send idempotency key. Ambiguous requests must not
+     // be resent automatically: the original may already have been accepted.
+     if(sms&&attempted)await deliveryStore.finish(job,'failed').catch(()=>{});
+     else await deliveryStore.retry(job).catch(()=>{});
+     logger(sms?'SMS delivery could not be confirmed.':'Drainage email remains queued for retry.');
+    }
    }));return{sent,failed};})().finally(()=>{flushing=null;});return flushing;
   },
-  kick(waitUntil){if(!config.enabled||Date.now()-lastKick<5000)return;lastKick=Date.now();const task=service.flush().catch(()=>logger('Email delivery worker unavailable.'));if(waitUntil)waitUntil(task);else void task;}
+  kick(waitUntil){if(!service.enabled||Date.now()-lastKick<5000)return;lastKick=Date.now();const task=service.flush().catch(()=>logger('Notification delivery worker unavailable.'));if(waitUntil)waitUntil(task);else void task;}
  };return service;
 }
 export function verifiedUserEmail(url,key,fetcher=fetch){return async id=>{

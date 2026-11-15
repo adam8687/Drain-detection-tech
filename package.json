@@ -34,6 +34,7 @@
     "email:retry": "node --env-file-if-exists=supabase/.env.cloud scripts/email-retry.mjs",
     "history:reconcile": "node --env-file-if-exists=backend/.env scripts/reconcile-drain-history.mjs",
     "egress:estimate": "node scripts/egress-estimate.mjs",
-    "egress:simulate": "node scripts/egress-simulate.mjs"
+    "egress:simulate": "node scripts/egress-simulate.mjs",
+    "notifications:setup": "node scripts/notifications-setup.mjs"
   }
 }

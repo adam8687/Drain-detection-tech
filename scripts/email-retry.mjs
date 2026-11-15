@@ -1,4 +1,4 @@
-// Operator-only retry command; normal sends are triggered by sensor ingestion.
+// Operator-only email/SMS retry command; normal sends are triggered by sensor ingestion.
 import{readFile}from'node:fs/promises';import{parseEnv}from'node:util';
 const env={...parseEnv(await readFile(new URL('../backend/.env',import.meta.url),'utf8').catch(()=>'')),...process.env};
 const base=env.SUPABASE_FUNCTION_URL||(env.SUPABASE_URL?env.SUPABASE_URL+'/functions/v1/drain-api':env.API_BASE_URL),token=env.DRAIN_EMAIL_WORKER_TOKEN;
