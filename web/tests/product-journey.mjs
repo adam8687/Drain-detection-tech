@@ -122,7 +122,7 @@ async function journey(profile,index){
     if(run===1){await page.reload();await check('reload resumes the same drainage capture',()=>page.getByRole('heading',{name:'Release the plug',exact:true}).waitFor());}
     assert.equal((await active('monitoring')).record_id,observation.record_id);
     for(const depth of [40,36,32,30,27.5,25,22.5,20,17.5,15,12.5,10,7.5,5,2.5,0,0,0]){await new Promise(r=>setTimeout(r,500));await append([sample(Date.now(),depth)],'monitoring');}
-    if(run===1)await page.getByText('1 of 2 drainage checks saved · Empty reference saved',{exact:true}).waitFor();
+    if(run===1)await page.getByText('Drain check 1 of 2 · Finished calibrating',{exact:true}).waitFor();
   }
   await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();
   await check('two controlled checks save calibration without changing the sensor stream',async()=>{const all=await app.store.list({fixture_id:fixture},100);const cal=all.find(r=>r.record_type==='calibration'&&r.calibration?.drainage?.status==='ready');assert.ok(cal);assert.equal(cal.calibration.drainage.runs.length,2);assert.ok(cal.calibration.drainage.baseline_duration_seconds>0);assert.ok(cal.calibration.drainage.runs.every(r=>r.recording_id===observation.record_id));await page.getByText('Empty distance: 300 mm',{exact:true}).waitFor();});
