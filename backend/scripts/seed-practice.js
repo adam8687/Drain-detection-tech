@@ -32,7 +32,7 @@ export async function seedPracticeData(store, progress = () => {}) {
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let store;
-  try { store = createRecordStore(configFromEnv({ ...process.env, STORAGE_BACKEND: 'supabase' })); const result = await seedPracticeData(store, console.log); console.log(`PASS: saved and read back ${result.records} records and ${result.measurements} measurements for ${result.fixture_id}. No hardware data changed.`); }
+  try { store = createRecordStore(configFromEnv()); const result = await seedPracticeData(store, console.log); console.log(`PASS: saved and read back ${result.records} records and ${result.measurements} measurements for ${result.fixture_id}. No hardware data changed.`); }
   catch (error) { console.error(error.status === 503 ? error.message : 'Practice seed failed; no existing records were overwritten. Apply the new migration, then retry.'); process.exitCode = 1; }
   finally { if (store) await store.close(); }
 }
