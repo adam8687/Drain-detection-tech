@@ -147,7 +147,7 @@ async function journey(profile,index){
   streamTimer=setInterval(()=>{streamWork=streamWork.then(()=>append([sample(Date.now(),50)],'monitoring'));},500);
   await check('connection recovers and shows critical alert',()=>page.getByRole('alert').filter({hasText:'Running too long'}).waitFor({timeout:30000}));
   await page.getByRole('link',{name:'View alerts →',exact:true}).click();await page.waitForURL('**/alerts?**');
-  await check('live alert link preserves physical device filter',async()=>{await page.getByRole('heading',{name:'Drain running too long',exact:true}).waitFor();assert.equal(await page.getByLabel('Data',{exact:true}).inputValue(),'sensor');assert.equal(await page.getByLabel('Fixture',{exact:true}).inputValue(),fixture);});
+  await check('live alert link preserves physical device filter',async()=>{await page.getByRole('heading',{name:'Drain running too long',exact:true}).waitFor();assert.equal(await page.getByLabel('Data',{exact:true}).inputValue(),'sensor');assert.equal(await page.getByLabel('Unit',{exact:true}).inputValue(),fixture);});
   assert.equal(await page.getByRole('heading',{name:'Drain time not measured',exact:true}).count(),0);
   await layout('alerts');await page.getByRole('button',{name:'Acknowledge',exact:true}).first().click();await check('acknowledgment persists after reload',async()=>{await page.reload();await page.getByRole('checkbox',{name:'Show acknowledged'}).check();await page.getByRole('button',{name:'Mark unread',exact:true}).first().waitFor();});
   await page.getByRole('link',{name:'View recording →',exact:true}).first().click();await page.waitForURL('**/live-demo?**');await layout('alert-recording');

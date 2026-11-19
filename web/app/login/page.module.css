@@ -37,6 +37,8 @@
   white-space: nowrap;
 }
 
+.logo { display: block; height: 44px; width: auto; }
+
 .back {
   font-size: 14px;
   font-weight: 600;

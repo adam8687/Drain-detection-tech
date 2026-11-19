@@ -6,7 +6,7 @@ import DesignAsset from '../components/design-asset';
 const artwork = '/images/design/';
 
 export const metadata: Metadata = {
-  title: 'Smart Housing',
+  title: 'Synk | Catch the slow drain before it becomes a clog',
   description: 'Catch the slow drain before it becomes a clog.',
 };
 

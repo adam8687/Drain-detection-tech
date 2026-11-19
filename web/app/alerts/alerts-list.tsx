@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import AccountPanel from '../../components/account-panel';
+import ProductHeader from '../../components/product-header';
 import { useSession } from '../../lib/supabase';
 import { DrainApi, DrainApiError } from '../../lib/api';
 import type { AlertList, AlertSeverity, DataSource, DrainAlert } from '../../lib/api';
@@ -98,14 +99,13 @@ export default function AlertsList() {
   for (const a of unread) counts[a.severity]++;
   const visible = all.filter(a => (!severity || a.severity === severity) && (showAcknowledged || !acknowledged.has(a.alert_id)));
 
-  return <main className={styles.shell}>
-    <a href="/dashboard">← Back to dashboard</a>
+  return <><ProductHeader active="alerts"/><main className={styles.shell}>
     <h1>Alerts</h1>
-    <p className={styles.intro}>The empty-sink reference detects water. Time limits flag standing water while usual drain times are learned during normal use. Alerts refresh every 30 seconds.</p>
+    <p className={styles.intro}>Slow drains, standing water and sensor problems across your units. Alerts refresh every 30 seconds.</p>
     <div id="account" tabIndex={-1}><AccountPanel /></div>
 
     <div className={styles.controls}>
-      <label>Fixture <input placeholder="All fixtures" value={fixture} onChange={e => setFixture(e.target.value)} /></label>
+      <label>Unit <input placeholder="All units" value={fixture} onChange={e => setFixture(e.target.value)} /></label>
       <label>Data <select aria-label="Data" value={source} onChange={e => setSource(e.target.value as DataSource)}><option value="simulation">Simulation</option><option value="sensor">Physical sensors</option></select></label>
       <label><input type="checkbox" checked={showAcknowledged} onChange={e => setShowAcknowledged(e.target.checked)} />Show acknowledged</label>
       <button type="button" onClick={() => setRefresh(n => n + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
@@ -129,5 +129,5 @@ export default function AlertsList() {
     {visible.length > 0 && <ul className={styles.list} aria-live="polite">
       {visible.map(alert => <AlertCard key={alert.alert_id} alert={alert} acknowledged={acknowledged.has(alert.alert_id)} onToggle={() => toggle(alert.alert_id)} now={now} />)}
     </ul>}
-  </main>;
+  </main></>;
 }
