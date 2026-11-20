@@ -1,4 +1,6 @@
+import { redirect } from 'next/navigation';
+
 export default async function DrainPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <main><h1>Drain {id}</h1><p>Use the dashboard to select this device and view its readings.</p><a href="/dashboard">Back to dashboard</a></main>;
+  redirect(/^[a-zA-Z0-9_-]{1,64}$/.test(id) ? `/live-demo?fixture=${encodeURIComponent(id)}` : '/dashboard');
 }

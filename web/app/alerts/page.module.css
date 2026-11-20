@@ -1,15 +1,17 @@
 .shell { max-width: 880px; width: 100%; margin: 0 auto; padding: 48px 24px 80px; }
-.shell > a { text-decoration: underline; text-underline-offset: 4px; }
-.shell h1 { font-size: clamp(28px, 5vw, 42px); letter-spacing: -1.5px; margin: 20px 0 8px; }
-.intro { color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-5); }
+.shell h1 { font-size: 32px; line-height: 44px; font-weight: 800; margin-bottom: 4px; }
+.intro { color: var(--color-text-secondary); font-size: 14px; max-width: 640px; margin-bottom: var(--space-5); }
 
-.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; margin: var(--space-5) 0; padding: 20px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-panel); background: var(--color-surface); }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; margin: var(--space-5) 0; padding: 20px; border-radius: 20px; background: var(--color-surface); box-shadow: var(--shadow-paper); }
 .controls label { display: flex; align-items: center; gap: 10px; }
-.controls input:not([type="checkbox"]), .controls select, .controls button { font: inherit; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-surface); color: inherit; }
+.controls input:not([type="checkbox"]), .controls select { font: inherit; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 12px; background: var(--color-input); box-shadow: var(--shadow-inset); color: inherit; }
+.controls input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--color-primary); }
+.controls button { font: inherit; font-weight: 700; min-height: 40px; padding: 8px 16px; border: 0; border-radius: 12px; background: var(--color-surface); box-shadow: var(--shadow-paper); color: inherit; }
+.controls button:hover:not(:disabled) { background: var(--color-surface-muted); }
 .controls input:not([type="checkbox"]) { max-width: 180px; }
 .controls button { cursor: pointer; }
 .controls button:disabled { opacity: .6; cursor: default; }
-.error { color: #dc2626; margin: var(--space-4) 0; }
+.error { color: var(--color-text-secondary); margin: var(--space-4) 0; padding: 16px 20px; border-radius: 16px; background: var(--color-surface); box-shadow: var(--shadow-paper); }
 
 .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: var(--space-5); }
 .summary button { font: inherit; color: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 16px; border: 1px solid var(--color-border-strong); border-left-width: 4px; border-radius: var(--radius-card); background: var(--color-surface); }

@@ -38,18 +38,13 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
     <ProductHeader active="live" query={query} onQuery={setQuery}/>
 
     <main id="live-content" className={styles.content}><OceanWaves bottom/>
-      <a href="/dashboard" className={styles.back}>‹ Back to fleet</a>
+      <a href="/dashboard" className={styles.back}>‹ Back to dashboard</a>
       <div className={styles.titleRow}>
         <div className={styles.title}>
           <h1>{fixtureName}</h1>
-          <div className={styles.meta}><span className={styles.tag}>{status}</span><span>{data.fixture || 'Choose a fixture'} · {data.source === 'sensor' ? 'Physical sensor' : 'Simulation recordings'}</span></div>
-        </div>
-        <div className={styles.titleActions}>
-          <button className={styles.secondary} disabled aria-describedby="unsupported-actions">Mute alerts</button>
-          <button className={styles.primary} disabled aria-describedby="unsupported-actions">Create work order</button>
+          <div className={styles.meta}><span className={styles.tag}>{status}</span><span>{data.fixture || 'Choose a unit'} · {data.source === 'sensor' ? 'Physical sensor' : 'Simulation recordings'}</span></div>
         </div>
       </div>
-      <p id="unsupported-actions" className={styles.supportNote}>{data.source === 'sensor' ? 'Physical sensor recordings' : 'Simulation recordings'} · Alert management and work orders are not available yet.</p>
 
       <details className={styles.recordingOptions}><summary>Device and recording options</summary><div className={styles.filters}>
         <label>Data source<select aria-label="Data source" value={data.source} onChange={event => data.setSource(event.target.value as DataSource)}><option value="sensor">Physical sensor</option><option value="simulation">Simulation recordings</option></select></label><button className={styles.secondary} onClick={data.refresh} disabled={data.loading}>Refresh</button>
@@ -60,7 +55,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
         <p>{data.needsAuth ? 'Sign in to view your recordings.' : data.error}</p>
         {data.needsAuth && <a href="/login">Sign in to your account</a>}
       </div>}
-      <p className={styles.loading} role="status" aria-live="polite">{data.loading ? 'Loading recordings…' : !data.error && !view ? data.fixture ? 'No recordings for this fixture and data source. Use Recording controls on the dashboard to begin.' : 'No saved fixtures or recordings were found.' : ''}</p>
+      <p className={styles.loading} role="status" aria-live="polite">{data.loading ? 'Loading recordings…' : !data.error && !view ? data.fixture ? 'No recordings for this unit yet. Use guided drain setup below to begin.' : 'No units or recordings yet. Add a unit to begin.' : ''}</p>
 
       {data.fixture && <a className={styles.back} href={`/add-unit?fixture=${encodeURIComponent(data.fixture)}`}>Guided drain setup →</a>}
       {data.fixture&&data.source==='sensor'&&<section className={styles.card} aria-label="Live updates"><label><input type="checkbox" role="switch" aria-label="Live demo" checked={data.demo} disabled={!active&&!data.demo} onChange={event=>data.setDemo(event.target.checked)}/> Live demo</label><p role="status" aria-live="polite">{data.demo?data.live.message:'Normal updates · readings arrive in batches.'}</p><p className={styles.caption}>Live demo sends readings as they arrive while this page is visible. Normal batching resumes automatically after the last live session ends.</p></section>}
@@ -70,7 +65,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
           <section className={styles.card} aria-labelledby="last-test">
             <div className={styles.cardHeader}><h2 id="last-test">{view?.record.record_type === 'calibration' ? 'Calibration recording' : view?.record.record_type === 'monitoring' ? 'Monitoring recording' : 'Last drain test'}</h2><span>{view ? date(view.record.created_at) : 'No recording selected'}</span></div>
             <div className={styles.testBody}>
-              <figure className={styles.tube}><DesignAsset file="f4251.svg"/><figcaption>Sensor illustration</figcaption></figure>
+              <figure className={styles.tube} aria-hidden="true"><DesignAsset file="f4251.svg"/></figure>
               <div className={styles.stats}>
                 <p className={styles.caption}>Drain time</p>
                 <p className={styles.duration}><strong style={duration != null && duration.toFixed(1).length >= 5 ? { fontSize: 36 } : undefined}>{duration != null ? duration.toFixed(1) : '—'}</strong><span>s</span></p>
@@ -87,7 +82,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
           <section className={styles.card} aria-labelledby="history-title">
             <div className={styles.cardHeader}><h2 id="history-title">Drain time, last {range} days</h2><div className={styles.range} role="group" aria-label="History range">{[7, 30, 90].map(days => <button key={days} aria-pressed={range === days} onClick={() => setRange(days)}>{days}d</button>)}</div></div>
             <HistoryChart records={data.records} range={range} onSelect={data.setRecordId} presentation="line" />
-            <p className={styles.caption}>Completed recordings for this fixture and source. Includes server-measured cycles in monitoring windows and completed tests from the latest 200 recordings.</p>
+            <p className={styles.caption}>Completed recordings for this unit. Includes server-measured cycles in monitoring windows and completed tests from the latest 200 recordings.</p>
           </section>
           <details className={styles.card}><summary>Drain-time forecast</summary><section aria-labelledby="forecast-title">
             <h2 id="forecast-title">Time left to drain</h2>
@@ -100,7 +95,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
         <aside className={styles.rightColumn}>
           {data.fixture&&<EmailSettings fixture={data.fixture}/>}
           <section className={styles.card} aria-labelledby="flagged-title"><h2 id="flagged-title">{drainStatus?.status==='slow_drain'||drainStatus?.status==='running_too_long'?'Why it was flagged':'Drain monitoring'}</h2><p className={styles.description}>{drainStatus?.message??'Save the empty-sink reference to begin monitoring.'}</p><dl className={styles.metrics}><div><dt>Usual drain time</dt><dd>{baseline!=null?`${baseline.toFixed(1)} s`:'Learning from normal use'}</dd></div><div><dt>Slow-drain threshold</dt><dd>{drainStatus?.slow_threshold_seconds!=null?`${drainStatus.slow_threshold_seconds.toFixed(1)} s`:'—'}</dd></div><div><dt>Water-still-present limit</dt><dd>{drainStatus?.timeout_threshold_seconds!=null?`${drainStatus.timeout_threshold_seconds.toFixed(1)} s`:'—'}</dd></div><div><dt>Empty reference</dt><dd>{view?.record.calibration?'Saved':'Not recorded'}</dd></div></dl></section>
-          <section className={styles.card}><h2>Where this sensor sits</h2><div className={styles.cutaway}><div className={styles.cutawayCanvas}><DesignAsset file="adace.svg"/></div></div><p className={styles.placement}>{fixtureName==='Live view'?'Select a fixture to see its location.':fixtureName}</p></section>
+          <section className={styles.card}><h2>Where this sensor sits</h2><div className={styles.cutaway}><div className={styles.cutawayCanvas}><DesignAsset file="adace.svg"/></div></div><p className={styles.placement}>{fixtureName==='Live view'?'Select a unit to see its location.':fixtureName}</p></section>
           <section className={styles.card} aria-labelledby="activity-title">
             <h2 id="activity-title">Activity</h2>
             <ol className={styles.activity}>

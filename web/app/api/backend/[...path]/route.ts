@@ -30,7 +30,10 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     const auth = supplied || (viewer ? `Bearer ${viewer}` : null);
     const response = await fetch(target, { method, cache: 'no-store', redirect: 'error', signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]), headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: auth } : {}) }, ...(bytes ? { body: bytes as BodyInit } : {}) });
     return new Response(response.body, { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
-  } catch { return Response.json({ error: { code: 'backend_unavailable', message: cloud ? 'Supabase function unavailable. Check cloud deployment and network access.' : process.env.VERCEL ? 'The hosted API is not configured. Set SUPABASE_FUNCTION_URL in the Vercel project environment variables and redeploy.' : 'Start the backend with npm start and apply the drain_records migration.' } }, { status: 503 }); }
+  } catch (err) {
+    if (!request.signal.aborted) console.error(`[backend gateway] ${route} unreachable at ${base}.`, cloud ? 'Check the Supabase function deployment and network access.' : process.env.VERCEL ? 'Set SUPABASE_FUNCTION_URL in the Vercel project environment variables and redeploy.' : 'Start the backend with npm start and apply the drain_records migration.', err);
+    return Response.json({ error: { code: 'backend_unavailable', message: 'We can’t reach your sensors right now. Check your connection and try again in a moment.' } }, { status: 503 });
+  }
 }
 export const GET = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'GET');
 export const POST = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'POST');
