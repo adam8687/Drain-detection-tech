@@ -27,9 +27,9 @@ function timeAgo(iso: string, now: number) {
 
 function AlertCard({ alert, acknowledged, onToggle, now }: { alert: DrainAlert; acknowledged: boolean; onToggle: () => void; now: number }) {
   const viewHref = `/live-demo?fixture=${encodeURIComponent(alert.fixture_id)}&record=${encodeURIComponent(alert.record_id)}&source=${alert.data_source}`;
-  return <li className={`${styles.card} ${styles[alert.severity]} ${acknowledged ? styles.acknowledged : ''}`}>
+  return <li className={`${styles.card} ${acknowledged ? styles.acknowledged : ''}`}>
     <div className={styles.cardHead}>
-      <span className={`${styles.severity} ${styles[`severity_${alert.severity}`]}`}>{SEVERITY_TEXT[alert.severity]}</span>
+      <span className={styles.severity}><i className={styles[`dot_${alert.severity}`]} />{SEVERITY_TEXT[alert.severity]}</span>
       <h2>{alert.title}</h2>
       <time dateTime={alert.occurred_at} title={new Date(alert.occurred_at).toLocaleString()}>{timeAgo(alert.occurred_at, now)}</time>
     </div>
@@ -115,9 +115,9 @@ export default function AlertsList() {
     {error && <p role="alert" className={styles.error}>{error}</p>}
 
     {data && <div className={styles.summary} role="group" aria-label="Filter by severity">
-      <button type="button" aria-pressed={severity === ''} onClick={() => setSeverity('')}><strong>{unread.length}</strong><span>Unread</span></button>
-      {(['critical', 'warning', 'info'] as const).map(level => <button key={level} type="button" className={styles[`chip_${level}`]} aria-pressed={severity === level} onClick={() => setSeverity(severity === level ? '' : level)}>
-        <strong>{counts[level]}</strong><span>{SEVERITY_TEXT[level]}</span>
+      <button type="button" aria-pressed={severity === ''} onClick={() => setSeverity('')}><span>Unread</span><small>{unread.length}</small></button>
+      {(['critical', 'warning', 'info'] as const).map(level => <button key={level} type="button" aria-pressed={severity === level} onClick={() => setSeverity(severity === level ? '' : level)}>
+        <i className={styles[`dot_${level}`]} /><span>{SEVERITY_TEXT[level]}</span><small>{counts[level]}</small>
       </button>)}
     </div>}
 
