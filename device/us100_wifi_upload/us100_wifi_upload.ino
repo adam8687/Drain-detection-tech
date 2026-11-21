@@ -336,24 +336,34 @@ void loop() {
       samplingEnabled.store(true);
       if (xTaskCreatePinnedToCore(sampleTask,"drain-sampling",4096,nullptr,2,nullptr,1) != pdPASS) { stop("Sampling task unavailable."); return; }
     }
+    // Pause network sends, while the sampling task keeps collecting. Waiting
+    // here lets the next live request include everything already queued.
+    const uint32_t readyAt = millis();
+    const uint32_t minUploadGap = liveMode.uploadGapMs(readyAt);
+    if (readyAt - lastAttempt < minUploadGap) { delay(minUploadGap - (readyAt - lastAttempt)); return; }
     Sample sample;
     if (xQueueReceive(samples,&sample,pdMS_TO_TICKS(100)) != pdTRUE) return;
-    const bool drainEnded = sample.drainEnded;
-    const String point = String("{\"reading_id\":\"") + sample.id + "\",\"timestamp\":\"" + sample.time
-      + "\",\"sensor\":" + sensorJson(sample.reading) + "}";
-    const bool firstOfBatch = pendingBody.isEmpty();
-    if (firstOfBatch) {
-      pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + recordId + "/measurements";
-      pendingBody = String("{\"measurements\":[") + point + "]}";
-    } else {
-      pendingBody.remove(pendingBody.length() - 2);  // reopen "]}"
-      pendingBody += "," + point + "]}";
-    }
-    batchCount++;
-    if (firstOfBatch) pendingJournal = pendingUrl + "\n" + point + "\n"; else pendingJournal += point + "\n";
-    // A batch uploads when it is full, or at once when a drain has just ended (the sink is dry, so pausing to upload
-    // loses nothing and the result reaches the app in about a second instead of waiting for the batch to fill).
-    if (batchCount < liveMode.batchSize(millis()) && !drainEnded) return;
+    const int uploadThreshold = liveMode.batchSize(millis());
+    bool drainEnded;
+    do {
+      drainEnded = sample.drainEnded;
+      const String point = String("{\"reading_id\":\"") + sample.id + "\",\"timestamp\":\"" + sample.time
+        + "\",\"sensor\":" + sensorJson(sample.reading) + "}";
+      if (batchCount == 0) {
+        pendingUrl = String(API_BASE_URL) + "/api/v1/records/" + recordId + "/measurements";
+        pendingBody = String("{\"measurements\":[") + point + "]}";
+        pendingJournal = pendingUrl + "\n";
+      } else {
+        pendingBody.remove(pendingBody.length() - 2);  // reopen "]}"
+        pendingBody += "," + point + "]}";
+      }
+      batchCount++;
+      pendingJournal += point + "\n";
+      // Live uploads don't wait for more readings. Sending samples already in
+      // the queue together keeps up when a request takes longer than 500 ms.
+    } while (uploadThreshold == 1 && !drainEnded && batchCount < LiveMode::maxBatchSize &&
+             xQueueReceive(samples, &sample, 0) == pdTRUE);
+    if (batchCount < uploadThreshold && !drainEnded) return;
     if (!writeJournal()) { stop("Could not persist the batch; upload stopped."); return; }
     batchReady = true;
   }

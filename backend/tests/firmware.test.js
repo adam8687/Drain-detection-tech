@@ -18,7 +18,9 @@ test('the sketch uploads at the end of a drain and writes flash once per batch',
  const sketch=readFileSync(here('../../device/us100_wifi_upload/us100_wifi_upload.ino'),'utf8');
  assert.match(sketch,/#include "drain_activity\.h"/);
  assert.match(sketch,/activity\.update\(sample\.reading\.distanceMm\)/);
- assert.match(sketch,/if \(batchCount < liveMode\.batchSize\(millis\(\)\) && !drainEnded\) return;/,'a finished drain uploads without waiting for the batch to fill');
+ assert.match(sketch,/const int uploadThreshold = liveMode\.batchSize\(millis\(\)\);/);
+ assert.match(sketch,/while \(uploadThreshold == 1 && !drainEnded && batchCount < LiveMode::maxBatchSize &&\s+xQueueReceive\(samples, &sample, 0\) == pdTRUE\)/,'live uploads catch up using readings already queued without waiting');
+ assert.match(sketch,/if \(batchCount < uploadThreshold && !drainEnded\) return;/,'a finished drain uploads without waiting for the batch to fill');
  assert.equal(sketch.includes('journalPoint'),false,'no per-reading flash write');
  assert.equal((sketch.match(/writeJournal\(\)/g)||[]).length,2,'defined once, called once (when the batch is complete)');
 });

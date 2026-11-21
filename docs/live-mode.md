@@ -22,9 +22,10 @@ thresholds and lifetime health history are unchanged.
   indication after four seconds. Data arrival times and sensor freshness remain
   separate from this mode acknowledgment.
 - In normal monitoring, activation waits for the next upload (about five seconds
-  at the nominal cadence). Live delivery sends each reading without waiting to
-  fill a batch, and the app polls the bounded graph every 750 ms. Network and
-  sensor delays still apply; no physical end-to-end latency has been certified.
+  at the nominal cadence). The board starts live uploads at least 750 ms apart
+  and sends up to ten readings already queued. It continues sampling every
+  500 ms. The browser polls the live graph about once per second. Network and
+  sensor delays still apply.
 - The command is delivered in the `X-Drain-Live-For-Ms` response header. Supported
   devices announce `X-Drain-Live-Capability: 1` and report
   `X-Drain-Live-Active: 0|1`. Command processing is optional: an error returns zero
