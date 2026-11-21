@@ -169,9 +169,21 @@ async function journey(profile,index){
     await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
   });
 
-  await check('live view shows delayed readings and recovers visibly', async () => {
-    await updates.getByText('Readings are delayed.', { exact: false }).waitFor();
-    assert.equal(await updates.locator('time').count(), 1);
+  await check('live view stays calm when older readings are still advancing', async () => {
+    await page.waitForTimeout(5000);
+    assert.equal(await updates.getByText('Readings are delayed.', { exact: false }).count(), 0);
+    const point = sample(Date.now() - 3500, 4);
+    await append([point]);
+    await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
+    assert.equal(await updates.getByText('Readings are delayed.', { exact: false }).count(), 0);
+  });
+
+  await check('live view warns after readings stop advancing and clears the warning on recovery', async () => {
+    const shownAt = Date.now();
+    await updates.getByText('Readings are delayed.', { exact: false }).waitFor({ timeout: 12000 });
+    assert.ok(Date.now() - shownAt >= 7000, 'a brief pause must not be treated as a stall');
+    assert.equal(await updates.locator('time').count(), 1, 'keep the last reading visible during a stall');
+    await updates.getByText('Check that the unit has power and Wi-Fi.', { exact: false }).waitFor();
     const point = sample(Date.now(), 5);
     await append([point]);
     await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
@@ -180,6 +192,18 @@ async function journey(profile,index){
     await recordingCard.getByText('5 mm',{exact:true}).waitFor();
     await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
     checks.push(`simulated sample to visible water level in ${Date.now() - Date.parse(point.timestamp)} ms`);
+  });
+
+  await check('a sensor that responds without a valid reading gets its own message', async () => {
+    const point = sample(Date.now(), 0, true);
+    await append([point]);
+    await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
+    await updates.getByText('Check that nothing is blocking the sensor.', { exact: false }).waitFor();
+    assert.equal(await updates.getByText('Readings are delayed.', { exact: false }).count(), 0);
+    const recovered = sample(Date.now() + 1);
+    await append([sample(Date.now()), recovered]);
+    await updates.locator(`time[datetime="${recovered.timestamp}"]`).waitFor();
+    await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
   });
 
   await check('live updates continue in the next recording window',async()=>{
