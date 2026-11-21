@@ -78,6 +78,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
     if (!previousView) { setView(null); setLoadingRecord(true); }
     async function load() {
       if(document.hidden){timer=setTimeout(()=>void load(),1000);return;}
+      const requestStarted = performance.now();
       try {
         const next = await api.record(recordId, null, controller.signal, 120, previousView?.record.measurements.at(-1)?.reading_id);
         if (controller.signal.aborted) return;
@@ -91,7 +92,13 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
         setRecords(previous => previous.map(record => record.record_id === recordId
           ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.computed.sample_count, calibration: next.record.calibration, drain_status: next.computed.drain_status,drain_cycles:next.computed.drain_cycles }
           : record));
-        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), demo?LIVE_RECORD_POLL_MS:idle?15000:3000);}else {
+        if (next.record.recording_status === 'recording') {
+          const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;
+          const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;
+          // Count the request itself toward the live interval while keeping one fetch in flight.
+          const liveDelay=Math.max(0,Math.ceil(LIVE_RECORD_POLL_MS-(performance.now()-requestStarted)));
+          timer=setTimeout(() => void load(), demo?liveDelay:idle?15000:3000);
+        } else {
           if(wasRecording&&next.record.continued_in){setRecordChoice(next.record.continued_in);}
           else setDemoState('off');
         }

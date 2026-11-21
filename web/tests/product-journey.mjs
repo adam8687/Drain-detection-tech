@@ -206,6 +206,35 @@ async function journey(profile,index){
     await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
   });
 
+  await check('live refreshes count response time toward the polling interval', async () => {
+    const current = await active('monitoring');
+    const matchesRecord = url => url.pathname.endsWith(`/api/v1/records/${current.record_id}`);
+    const starts = [];
+    let finish;
+    const completed = new Promise(resolve => { finish = resolve; });
+    const delayedResponse = async route => {
+      starts.push(Date.now());
+      const response = await route.fetch();
+      await new Promise(resolve => setTimeout(resolve, 650));
+      await route.fulfill({response});
+      if (starts.length === 4) finish();
+    };
+    await page.route(matchesRecord, delayedResponse);
+    try {
+      const timeout = new Promise((_, reject) => {
+        const timer = setTimeout(() => reject(Error('Expected four live record refreshes')), 10000);
+        completed.then(() => clearTimeout(timer));
+      });
+      await Promise.race([completed, timeout]);
+      const intervals = starts.slice(1).map((time,i) => time-starts[i]).sort((a,b) => a-b);
+      assert.ok(intervals[0] >= 950, `Live requests must stay within the allowed rate: ${intervals}`);
+      assert.ok(intervals[1] < 1400, `Live polling must count response time toward the interval: ${intervals}`);
+      checks.push(`median live refresh interval with a 650 ms response delay: ${intervals[1]} ms`);
+    } finally {
+      await page.unroute(matchesRecord, delayedResponse);
+    }
+  });
+
   await check('live updates continue in the next recording window',async()=>{
     const old=await app.store.get((await active('monitoring')).record_id);
     const count=5000-old.measurements.length;
