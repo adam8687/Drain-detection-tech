@@ -494,6 +494,121 @@
         ]
       }
     },
+    "/api/v1/fleet": {
+      "get": {
+        "summary": "List a page of authorized unit summaries and recent completed drains",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "data_source",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "sensor",
+                "simulation"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/history": {
+      "get": {
+        "summary": "Read bounded completed-drain history from saved summaries",
+        "responses": {
+          "200": {
+            "description": "Success; POST creation/append may return 201"
+          },
+          "401": {
+            "description": "Backend token required"
+          },
+          "409": {
+            "description": "Conflict, missing calibration, or finished recording"
+          },
+          "422": {
+            "description": "Invalid measurement or record input"
+          },
+          "503": {
+            "description": "Storage unavailable; no fallback"
+          }
+        },
+        "parameters": [
+          {
+            "name": "fixture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "data_source",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "sensor",
+                "simulation"
+              ]
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "1d",
+                "1w",
+                "1m",
+                "3m",
+                "1y",
+                "all"
+              ]
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/sensor/active-record": {
       "get": {
         "summary": "Sensor-key-only discovery of its own active physical recording ID/type; no history or measurements",

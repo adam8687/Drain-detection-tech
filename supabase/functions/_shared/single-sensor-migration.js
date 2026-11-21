@@ -13,6 +13,9 @@ export function convertTwoSensorRecord(record) {
 }
 export function publicSensorRecord(record) {
   if(!record)return null;
-  const {schema_version,revision,...rest}=record;
+  const {schema_version,revision,continued_from,continued_in,rollover_root,last_reading_at,...rest}=record;
+  if(continued_from)rest.continued_from=continued_from;
+  if(continued_in)rest.continued_in=continued_in;
+  if(rollover_root)rest.rollover_root=rollover_root;
   return schema_version===1?{...rest,schema_version:1}:rest;
 }

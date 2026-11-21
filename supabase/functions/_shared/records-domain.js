@@ -147,19 +147,34 @@ export function emptyLevelShift(row) {
 }
 // Monitoring stores a continuous window. Derive individual cycles without rewriting
 // measurements or saving synthetic records. Event IDs remain stable across polls.
-export function monitoringEvents(row) {
-  if (row.schema_version===1 || row.record_type !== 'monitoring' || !row.calibration) return [];
-  const points = dropEchoes(ordered(row.measurements).filter((p,i,all) => !i || p.timestamp !== all[i-1].timestamp), row.calibration), events = [];
+export const MONITORING_PREFIX = Symbol('monitoring prefix');
+
+function scanMonitoring(row, keepCarry=false) {
+  if (row.schema_version===1 || row.record_type !== 'monitoring' || !row.calibration) return {events:[]};
+  const prefix = row[MONITORING_PREFIX];
+  const raw = ordered(prefix ? [...prefix.measurements,...row.measurements] : row.measurements);
+  const origins = prefix ? new Map(prefix.origins) : null;
+  const origin = point => origins?.get(point.reading_id)??row.record_id;
+  const points = dropEchoes(raw.filter((p,i,all) => !i || p.timestamp !== all[i-1].timestamp), row.calibration), events = [];
   let start = null, dryCount = 0, peakIndex = null, peakDepth = 0, fallCount = 0, draining = false;
+  let reset = false, interiorDry = 0;
   const event = (end, finished) => {
     const measurements = points.slice(peakIndex, end + 1);
-    return {...row, record_id:`${row.record_id}:${points[start].reading_id}`, parent_record_id:row.record_id,
+    const crossedGap = origin(points[start])!==row.record_id && points.slice(start,end+1).some((p,i,run)=>i>0 &&
+      origin(p)!==origin(run[i-1]) && Date.parse(p.timestamp)-Date.parse(run[i-1].timestamp)>SETTINGS.maxGap);
+    return {...row, record_id:`${origin(points[start])}:${points[start].reading_id}`, parent_record_id:row.record_id,
       monitoring_event:true, record_type:'drainage', created_at:points[start].timestamp,
       measurements, recording_status:finished ? 'finished' : row.recording_status,
-      result:analyzeDrainage(measurements,row.calibration).result};
+      result:crossedGap ? {outcome:'uncertain',drainage_time_seconds:null} : analyzeDrainage(measurements,row.calibration).result};
   };
   for (let i=0;i<points.length;i++) {
     const values = depths(points[i],row.calibration);
+    // Only the first sample can be filtered differently when older evidence is
+    // prepended. A dry run within this window closes anything carried into it.
+    if (keepCarry && !reset && i>0) {
+      interiorDry = values?.every(d => d <= SETTINGS.dry) ? interiorDry + 1 : 0;
+      reset = interiorDry >= SETTINGS.stable;
+    }
     if (start === null) {
       if (!values?.some(d => d >= SETTINGS.wet)) continue;
       start = i; peakIndex = i; peakDepth = Math.max(...values); fallCount = 0; draining = false;
@@ -173,11 +188,19 @@ export function monitoringEvents(row) {
       if (fallCount >= SETTINGS.stable) draining = true;
     }
     dryCount = values?.every(d => d <= SETTINGS.dry) ? dryCount + 1 : 0;
-    if (dryCount >= SETTINGS.stable) { events.push(event(i,true)); start = null; dryCount = 0; }
+    if (dryCount >= SETTINGS.stable) {
+      if (origin(points[i]) === row.record_id) events.push(event(i,true));
+      start = null; dryCount = 0;
+    }
   }
-  if (start !== null) events.push(event(points.length-1,false));
-  return events;
+  if (start !== null && !row.continued_in && row.measurements.length) events.push(event(points.length-1,false));
+  if (!keepCarry) return {events};
+  const offset = start === null ? raw.length - 2 : raw.findIndex(p => p.reading_id === points[start].reading_id) - 1;
+  const measurements = raw.slice(Math.max(0, offset));
+  return {events, carry:{measurements,origins:measurements.map(p => [p.reading_id,origin(p)]),reset}};
 }
+export function monitoringEvents(row) { return scanMonitoring(row).events; }
+export function monitoringCarry(row) { return scanMonitoring(row,true).carry; }
 export function drainCycleSummaries(record) {
   return monitoringEvents(record).filter(e => e.recording_status === 'finished').map(e => ({cycle_id:e.record_id, started_at:e.created_at, ended_at:e.measurements.at(-1).timestamp, drainage_time_seconds:e.result.drainage_time_seconds, outcome:e.result.outcome}));
 }
@@ -195,14 +218,14 @@ export function learnedBaseline(rows) {
 // Retrieve the original training runs independently of history limits or UI filters.
 // Stop once the first consistent window is found so later slowdowns cannot move it.
 const contextCache = new WeakMap();
-export async function statusContext(store, rows) {
+export async function statusContext(store, rows, decorate = row=>row) {
   let cache=contextCache.get(store);if(!cache){cache=new Map();contextCache.set(store,cache);}
   const groups=new Map();for(const row of rows)if(['drainage','monitoring'].includes(row.record_type))groups.set(`${row.fixture_id}\0${row.data_source}`,row);
   const context=await Promise.all([...groups].map(async([key,row])=>{
     // A saved drainage profile replaces the learned baseline, so skip the history scan (and its reads) entirely.
     const profiled=await sinkProfile(store,row);if(profiled&&row.calibration?.empty_distance_mm===profiled.empty)return[];
     const hit=cache.get(key);let training=hit&&hit.expires>Date.now()?hit.rows:null;
-    if(!training){training=[];for(let offset=0;;offset+=20){const page=await store.list({fixture_id:row.fixture_id,data_source:row.data_source,schema_version:2},20,'asc',offset);training.push(...page);if(learnedBaseline(training).seconds!==null||page.length<20)break;}}
+    if(!training){training=[];for(let offset=0;;offset+=20){const page=await store.list({fixture_id:row.fixture_id,data_source:row.data_source,schema_version:2},20,'asc',offset);training.push(...await Promise.all(page.map(decorate)));if(learnedBaseline(training).seconds!==null||page.length<20)break;}}
     const combined=[...new Map([...training,...rows.filter(r=>r.fixture_id===row.fixture_id&&r.data_source===row.data_source)].map(r=>[r.record_id,r])).values()];
     const baseline=learnedBaseline(combined);
     // Cache frozen training evidence, never a stale open recording that could
@@ -227,12 +250,15 @@ export async function withDrainageProfile(store,row){
   return found&&row.calibration.empty_distance_mm===found.empty?{...row,drainage_profile:found.profile}:row;
 }
 const profileCache=new WeakMap();
+export function invalidateDrainageProfile(store,row) {
+  profileCache.get(store)?.delete(`${row.fixture_id}\0${row.data_source}`);
+}
 async function sinkProfile(store,row){
   let cache=profileCache.get(store);if(!cache){cache=new Map();profileCache.set(store,cache);}
   const key=`${row.fixture_id}\0${row.data_source}`,hit=cache.get(key);if(hit&&hit.expires>Date.now())return hit.value;
   const latest=(await store.list({fixture_id:row.fixture_id,data_source:row.data_source,record_type:'calibration',recording_status:'finished',calibration_present:true,schema_version:2},1))[0];
   const profile=drainageProfileOf(latest?.calibration?.drainage),value=profile?{profile,empty:latest.calibration.empty_distance_mm}:null;
-  cache.set(key,{value,expires:Date.now()+30000});if(cache.size>64)cache.delete(cache.keys().next().value);return value;
+  cache.set(key,{value,expires:Date.now()+(value?30000:2000)});if(cache.size>64)cache.delete(cache.keys().next().value);return value;
 }
 export function drainStatuses(rows, now = Date.now()) {
   const shifts = new Map(rows.filter(r => r.record_type === 'monitoring').map(r => [r.record_id, emptyLevelShift(r)]));
@@ -343,24 +369,53 @@ export function forecast(points, calibration, stale = false) {
   if (seconds > 120) return withheld('Drainage is beyond the two-minute forecast horizon.');
   return { state: 'forecast', seconds_remaining: seconds, message: 'Experimental estimate; assumes the tap is off.' };
 }
+const SETUP_READING_MAX_AGE_MS = 5000;
+const setupReadingIsFresh = (point, now) => {
+  const age = now - Date.parse(point.timestamp);
+  return age >= 0 && age <= SETUP_READING_MAX_AGE_MS;
+};
+
+function setupSignal(orderedPoints, now) {
+  const readings = orderedPoints.slice(-3);
+  const latest = readings.at(-1);
+  if (!latest) return 'waiting';
+  if (!setupReadingIsFresh(latest, now)) return 'stale';
+  if (latest.sensor.status !== 'ok') return 'unstable';
+  if (readings.length < 3 || readings.some(point => !setupReadingIsFresh(point, now)) ||
+      new Set(readings.map(point => Date.parse(point.timestamp))).size < 3) return 'checking';
+  if (readings.some(point => point.sensor.status !== 'ok')) return 'unstable';
+  const distances = readings.map(point => point.sensor.distance_mm);
+  return Math.max(...distances) - Math.min(...distances) <= CALIBRATION_NOISE.maxSpreadMm ? 'steady' : 'unstable';
+}
+
 // Onboarding observes water before a timed test. It never infers tap-off from level.
 export function setupGuidance(record, now = Date.now()) {
-  const latest = ordered(record.measurements).at(-1), target = 40;
+  return waterSetupGuidance(ordered(record.measurements), record.calibration, now);
+}
+
+function waterSetupGuidance(points, calibration, now) {
+  const latest = points.at(-1), target = 40;
   const reply = (phase, message, water_depth_mm = null) => ({phase, message, water_depth_mm, target_depth_mm:target});
-  if (!record.calibration) return reply('needs_calibration','Record the empty basin first.');
+  if (!calibration) return reply('needs_calibration','Record the empty basin first.');
   if (!latest) return reply('waiting','Waiting for the device. Keep the tap off until readings arrive.');
-  if (now - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > now) return reply('sensor_problem','Readings have paused. Turn the tap off and reconnect the device.');
-  const values = depths(latest,record.calibration);
+  if (!setupReadingIsFresh(latest, now)) return reply('sensor_problem','Pause filling and wait for a fresh reading.');
+  const values = depths(latest,calibration);
   if (!values) return reply('sensor_problem','The sensor needs a clear reading. Turn the tap off and check its position.');
   const level = Math.max(...values);
   if (level < target) return reply('add_water',`Put the plug in and run the tap gently. Aim for about ${target} mm of water, well below the rim.`,level);
+  const previous = points.at(-2);
+  if (!previous || !setupReadingIsFresh(previous, now) || Date.parse(previous.timestamp) >= Date.parse(latest.timestamp) ||
+      (depths(previous, calibration)?.[0] ?? 0) < target) {
+    return reply('confirm_water', 'Pause filling while the sensor confirms the water level.', level);
+  }
   return reply('water_ready','Enough water. Turn the tap off, keep the plug in, then start the drain test.',level);
 }
 export function computedView(record, sample = null, seriesStart = 0) {
   const rows = ordered(record.measurements);
   const position = sample === null ? rows.length - 1 : Math.min(sample, rows.length - 1);
   const visible = rows.slice(0, position + 1);
-  const stale = record.recording_status === 'recording' && (!rows.length || Date.now() - Date.parse(rows.at(-1).timestamp) > 15000);
+  const now = Date.now();
+  const stale = record.recording_status === 'recording' && (!rows.length || now - Date.parse(rows.at(-1).timestamp) > 15000);
   const result = forecast(visible, record.calibration, stale && sample === null);
   const first = rows[0]?.timestamp;
   // Only display-series work is bounded. Forecasts, calibration and drain detection
@@ -376,8 +431,8 @@ export function computedView(record, sample = null, seriesStart = 0) {
   if (stale && sample === null && timeline.length) timeline.at(-1).seconds_remaining = null;
   const learning = record.record_type === 'calibration' ? learnCalibration(visible) : null;
   const latest = visible.at(-1);
-  const sensor_connection = !latest ? 'waiting' : latest.sensor.status !== 'ok' ? 'problem' : record.recording_status === 'recording' && (Date.now() - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > Date.now()) ? 'stale' : 'connected';
-  return { drain_cycles: drainCycleSummaries(record), monitoring_limits: { slow_seconds: STATUS_SETTINGS.initialSlowSeconds, standing_water_seconds: STATUS_SETTINGS.initialTimeoutSeconds }, sensor_connection, setup_guidance: setupGuidance({...record, measurements:visible}), forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, first_measurement_at: first ?? null, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
+  const sensor_connection = !latest ? 'waiting' : latest.sensor.status !== 'ok' ? 'problem' : record.recording_status === 'recording' && (now - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > now) ? 'stale' : 'connected';
+  return { drain_cycles: drainCycleSummaries(record), monitoring_limits: { slow_seconds: STATUS_SETTINGS.initialSlowSeconds, standing_water_seconds: STATUS_SETTINGS.initialTimeoutSeconds }, sensor_connection, setup_signal: setupSignal(visible, now), setup_guidance: waterSetupGuidance(visible, record.calibration, now), forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, first_measurement_at: first ?? null, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
 }
 // Applies points in order inside one atomic update. Points arriving after the
 // recording completes (calibration/drainage reaching its result) are dropped.

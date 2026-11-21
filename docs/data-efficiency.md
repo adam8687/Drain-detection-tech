@@ -82,9 +82,23 @@ are not enabled. Minute summaries require summary-aware empty-level, sensor-faul
 connection and silent-device checks, plus pre-event buffering and hardware tests.
 They must not be introduced merely by dropping points or lengthening timers.
 
-The existing bounded `drain_history` endpoint still needs integration into the
-customer history chart with clear aggregate labels and historical coverage checks.
-This release keeps the existing UI and its current history-selection behavior.
+The fleet dashboard and heat map use a page of unit summaries and up to twelve
+recent completed drains per unit from `drain_events`. Search applies across
+authorized units. The latest reading time is recorded on ingest, so the fleet
+view can show a stalled device without reading its raw measurement array.
+The existing `/history` endpoint serves bounded longer-range
+aggregates. Detailed recording views still retrieve the selected raw window and
+can follow links to adjacent windows. The fleet status is a recent snapshot,
+and the Alerts page still shows detailed alert history.
+
+Apply `202611200001_recording_continuations.sql` and
+`202611200002_fleet_summaries.sql` before deploying the API and web changes.
+Rollover closes a full window and opens its successor atomically. The API carries
+an unfinished drain into the next window for analysis. Both windows retain
+their original readings. Existing recordings have no new continuation links,
+since historical manual stops and automatic transitions used the same saved
+status. Old summaries are preserved. Review history reconciliation for missing
+events before using historical charts for analysis.
 The JSON-array database representation still rewrites a row internally on append;
 the new RPC removes repeated histories from network requests, not PostgreSQL WAL
 or storage work. A separate append-only measurement store and archival policy

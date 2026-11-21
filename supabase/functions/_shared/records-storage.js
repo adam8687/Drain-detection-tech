@@ -67,6 +67,9 @@ export class SupabaseRecordStore {
     catch { this.deltaOffUntil = Date.now() + 300000; return null; }
     const d = rows[0];
     if (!d || !Array.isArray(d.tail)) return null;
+    // A rollover attaches successor metadata. The existing delta RPC only
+    // returns original record fields, so rehydrate when closing a recording.
+    if (d.recording_status !== cached.row.recording_status) return null;
     const known = new Map(cached.row.measurements.map(p => [p.reading_id, p]));
     for (const p of d.tail) known.set(p.reading_id, p);
     const merged = ordered([...known.values()]);
@@ -109,6 +112,11 @@ export class SupabaseRecordStore {
     if (rows.length !== 1 || rows[0].record_id !== record.record_id) throw unavailable();
     return this.remember(rows[0]);
   }
+  async rollMonitoringRecord(id, nextId, incoming, createdAt) {
+    const rows = await this.request('rpc/roll_monitoring_record', {method:'POST',body:JSON.stringify({p_id:id,p_next:nextId,p_incoming:incoming,p_created_at:createdAt})}, false, 'missing');
+    if (!rows) throw new ApiError(503, 'rollover_unavailable', 'Apply the recording continuation migration before rolling over full recordings.');
+    return rows[0] ? this.remember(rows[0]) : null;
+  }
   async compareAndSet(previous, next, notificationEvents=[],notificationReferences=[]) {
     // Send the comparison in a POST body, not a URL that grows with the recording.
     const expected = { measurements: previous.measurements, calibration: previous.calibration, result: previous.result, recording_status: previous.recording_status };
@@ -132,11 +140,27 @@ export class SupabaseRecordStore {
     }
     if (rows == null) rows = await this.request('rpc/update_drain_record_compact', { method: 'POST', body: JSON.stringify({ p_record_id: previous.record_id, p_expected: expected, p_changes: changes }) });
     if (rows.length > 1 || (rows.length && rows[0].record_id !== next.record_id)) throw unavailable();
-    if (rows.length === 1) this.remember({...next,revision:rows[0].revision});
+    if (rows.length === 1) {
+      this.remember({...next,revision:rows[0].revision});
+      if (rows[0].revision !== undefined) this.revisions.set(next,String(rows[0].revision));
+    }
     else { const old = this.cache.get(previous.record_id); if (old) {this.cacheBytes -= old.bytes; this.cache.delete(previous.record_id);} }
     return rows.length === 1;
   }
   async saveDrainEvents(rows) { await this.request('drain_events?on_conflict=event_id', { method: 'POST', body: JSON.stringify(rows), headers: { Prefer: 'resolution=ignore-duplicates,return=representation' } }); }
   async drainHistory(fixture, source, since, points) { return this.request('rpc/drain_history', { method: 'POST', body: JSON.stringify({ p_fixture: fixture, p_source: source, p_since: since, p_points: points }) }); }
+  async fleetPage(who, source, after, search, limit) {
+    return this.request('rpc/drain_fleet_page', {method:'POST',body:JSON.stringify({
+      p_user:who.userId??null,p_viewer:who.viewerFixture??null,p_admin:Boolean(who.admin),p_source:source,p_after:after,p_search:search,p_limit:limit
+    })});
+  }
+  async saveFleetHealth(record, health) {
+    const revision = this.revisions.get(record);
+    if (revision === undefined) return false;
+    const rows = await this.request('rpc/save_drain_record_health', {method:'POST',body:JSON.stringify({
+      p_record_id:record.record_id,p_revision:revision,p_summary:health
+    })},false,'missing');
+    return Boolean(rows?.length);
+  }
   async close() { this.cache.clear(); this.cacheBytes=0; }
 }

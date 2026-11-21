@@ -17,7 +17,11 @@ const build = async env => {
 // Keep test identity settings out of the normal application build.
 const originals=await Promise.all(['next-env.d.ts','tsconfig.json'].map(async file=>({file,body:await readFile(root+'web/'+file,'utf8')})));
 const testEnv={...process.env,DRAIN_TEST_DIST_DIR:'.next-product-test',NEXT_PUBLIC_SUPABASE_URL:'https://product-test.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_product_test'};
-if(process.env.PRODUCT_TEST_SKIP_BUILD!=='1')await build(testEnv);
+try {
+  if(process.env.PRODUCT_TEST_SKIP_BUILD!=='1')await build(testEnv);
+} finally {
+  await Promise.all(originals.map(({file,body})=>writeFile(root+'web/'+file,body)));
+}
 const output=process.env.PRODUCT_TEST_OUTPUT || '/tmp/drain-product-tests';
 await mkdir(output,{recursive:true});
 const userId=randomUUID(), token=`eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({sub:userId,exp:Math.floor(Date.now()/1000)+7200,aud:'authenticated'})).toString('base64url')}.test`;
@@ -88,7 +92,7 @@ async function journey(profile,index){
   await page.getByRole('button',{name:'Back to log in',exact:true}).click();
   await page.getByLabel('Password',{exact:true}).fill('wrong-password');await page.getByRole('button',{name:'Log in',exact:true}).click();
   await check('incorrect password can be corrected',()=>page.getByRole('alert').filter({hasText:'not recognized'}).waitFor());
-  const fleetLoaded=Promise.all(['/devices','/records','/alerts'].map(path=>page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/api/v1'+path)&&r.status()===200)));
+  const fleetLoaded=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/api/v1/fleet')&&r.status()===200);
   await page.getByLabel('Password',{exact:true}).fill('test-password');await page.getByRole('button',{name:'Log in',exact:true}).click();await page.waitForURL('**/dashboard');await fleetLoaded;await page.goto(origin+'/add-unit');
   await page.getByLabel('Unit ID',{exact:true}).fill(fixture);await page.getByLabel('Location',{exact:true}).fill('Kitchen / upstairs bathroom');await layout('registration');
   const navigation=page.getByLabel('Navigation menu',{exact:true});
@@ -106,7 +110,17 @@ async function journey(profile,index){
   await check('refresh recovers active connection test',()=>page.getByRole('heading',{name:`Connect ${fixture}`}).waitFor());
   await append([sample(Date.now(),0,true)]);await check('one failed sensor prevents continuing',async()=>{await page.getByText('Check the sensor',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
   await check('setup waits for the device to confirm live delivery',async()=>{const r=await fetch(`${backend}/api/v1/devices/${fixture}/live-mode`,{headers:{authorization:`Bearer ${token}`}});const state=await r.json();assert.equal(state.requested,true);assert.equal(state.active,false);assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
-  await append([sample(Date.now())]);await page.getByRole('button',{name:'Continue',exact:true}).click();
+  // One upload receives the live command; the next confirms the device applied it.
+  // Keep sending during the handshake, as the physical board does.
+  const continueSetup=page.getByRole('button',{name:'Continue',exact:true});
+  for(let i=0;i<2;i++){
+    await new Promise(r=>setTimeout(r,500));
+    await append([sample(Date.now())]);
+  }
+  assert.ok(await continueSetup.isDisabled(),'two readings with a preceding failure do not confirm a steady signal');
+  await new Promise(r=>setTimeout(r,500));
+  await append([sample(Date.now())]);
+  await continueSetup.click();
   await page.getByLabel('The sink is empty',{exact:false}).check();await page.getByRole('button',{name:'Record empty sink',exact:false}).click();
   await append(Array.from({length:20},(_,i)=>sample(Date.now()-30000+i*500,i%2?14:0)),'calibration');
   await check('unstable empty readings cannot finish calibration',async()=>{await page.getByText('Keep the sink empty and the sensor mount still.',{exact:true}).waitFor();assert.equal(await page.getByText('Build your drain profile',{exact:true}).count(),0);});
@@ -116,7 +130,11 @@ async function journey(profile,index){
   await page.getByRole('button',{name:'Start water check',exact:true}).click();
   const observation=await active('monitoring');
   for(let run=1;run<=2;run++){
-    await append([sample(Date.now(),40)],'monitoring');await page.getByText('Enough water. Turn the tap off.',{exact:true}).waitFor();
+    await append([sample(Date.now(),40)],'monitoring');
+    await page.getByText('Pause filling while the sensor confirms the level.',{exact:true}).waitFor();
+    assert.ok(await page.getByRole('button',{name:`Start drainage check ${run} of 2`,exact:true}).isDisabled());
+    await append([sample(Date.now(),40)],'monitoring');
+    await page.getByText('Enough water. Turn the tap off.',{exact:true}).waitFor();
     await page.getByLabel('This drain is known to be clear and working normally.',{exact:true}).check();await page.getByLabel('The tap is off and the plug is still in.',{exact:true}).check();
     await append([sample(Date.now(),40)],'monitoring');await page.getByRole('button',{name:`Start drainage check ${run} of 2`,exact:true}).click();await page.getByRole('heading',{name:'Release the plug',exact:true}).waitFor();
     if(run===1){await page.reload();await check('reload resumes the same drainage capture',()=>page.getByRole('heading',{name:'Release the plug',exact:true}).waitFor());}
@@ -133,15 +151,75 @@ async function journey(profile,index){
   await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();await page.getByText('Two consistent tap-off checks are saved in this unit’s calibration for later alert comparisons.',{exact:true}).waitFor();await layout('ready');
   await page.screenshot({path:`${output}/${profile.name}-calibration-ready.png`,fullPage:true});
   await page.getByRole('button',{name:'Start monitoring',exact:true}).click();await page.waitForURL('**/live-demo?**');await page.getByText('Empty reference saved. Watching for water.',{exact:true}).first().waitFor();await layout('live-monitoring');
+  const recordingCard=page.getByRole('region',{name:'Monitoring recording'});
+  await check('empty monitoring card explains that it is waiting for readings',async()=>{
+    await recordingCard.getByText('Waiting for the first sensor reading.',{exact:true}).waitFor();
+    assert.doesNotMatch(await recordingCard.innerText(),/—|Measured drain time|Last completed drain/);
+  });
   await check('owner can save email preferences while sender setup is pending',async()=>{const checkbox=page.getByLabel('Email me when drainage takes unusually long',{exact:true});await checkbox.check();await page.getByText('Email preference saved.',{exact:true}).waitFor();await page.getByText('Email delivery is being set up.',{exact:false}).waitFor();});
   await check('owner can save SMS opt-in and number while provider setup is pending',async()=>{await page.getByLabel('Mobile number (with country code)',{exact:true}).fill('+15125550124');await page.getByLabel('Text me when drainage takes unusually long',{exact:true}).check();await page.getByRole('button',{name:'Save SMS settings',exact:true}).click();await page.getByText('SMS preference saved.',{exact:true}).waitFor();await page.reload();await page.getByLabel('Mobile number (with country code)',{exact:true}).waitFor();assert.equal(await page.getByLabel('Mobile number (with country code)',{exact:true}).inputValue(),'+15125550124');assert.equal(await page.getByLabel('Text me when drainage takes unusually long',{exact:true}).isChecked(),true);});
-  await check('live demo waits for a real device acknowledgment',async()=>{await page.getByRole('switch',{name:'Live demo',exact:true}).check();await page.getByText('Starting live view…',{exact:true}).waitFor();await append([sample(Date.now()),sample(Date.now()+1)]);await page.getByText('Live · fast updates confirmed',{exact:true}).waitFor();});
+  const updates = page.getByRole('region', { name: 'Reading updates' });
+  const liveSwitch = updates.getByRole('switch', { name: 'Live updates' });
+  await check('live view waits for device confirmation and displays the latest reading', async () => {
+    await liveSwitch.check();
+    await updates.getByText('Starting fast updates.', { exact: false }).waitFor();
+    const point = sample(Date.now() + 1);
+    await append([sample(Date.now()), point]);
+    await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
+    await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
+  });
+
+  await check('live view shows delayed readings and recovers visibly', async () => {
+    await updates.getByText('Readings are delayed.', { exact: false }).waitFor();
+    assert.equal(await updates.locator('time').count(), 1);
+    const point = sample(Date.now(), 5);
+    await append([point]);
+    await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
+    await updates.getByText('Water level 5 mm', { exact: false }).waitFor();
+    await recordingCard.getByText('Latest water level',{exact:true}).waitFor();
+    await recordingCard.getByText('5 mm',{exact:true}).waitFor();
+    await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
+    checks.push(`simulated sample to visible water level in ${Date.now() - Date.parse(point.timestamp)} ms`);
+  });
+
+  await check('live updates continue in the next recording window',async()=>{
+    const old=await app.store.get((await active('monitoring')).record_id);
+    const count=5000-old.measurements.length;
+    const start=Date.parse(old.measurements[0].timestamp)-count*500;
+    const padding=Array.from({length:count},(_,i)=>sample(start+i*500));
+    assert.equal(await app.store.compareAndSet(old,{...old,measurements:[...padding,...old.measurements]}),true);
+    const next=sample(Date.now(),6);
+    await append([next]);
+    await recordingCard.getByRole('link',{name:'Previous recording window'}).waitFor();
+    await updates.locator(`time[datetime="${next.timestamp}"]`).waitFor();
+    assert.equal(await liveSwitch.isChecked(),true);
+  });
 
   await check('hidden live page pauses refresh requests',async()=>{
     await page.waitForTimeout(500);let count=0;const countRequest=req=>{if(req.url().includes('/api/backend/'))count++;};
     await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});await page.waitForTimeout(500);page.on('request',countRequest);await page.waitForTimeout(3500);page.off('request',countRequest);assert.equal(count,0);assert.equal(app.store.db.prepare("SELECT count(*) AS n FROM drain_live_sessions WHERE fixture_id=? AND reason='demo' AND expires_at>?").get(fixture,Date.now()).n,0,'the hidden page releases its own demo lease');await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
   });
-  await check('switching live demo off restores normal updates',async()=>{await page.getByRole('switch',{name:'Live demo',exact:true}).uncheck();await page.getByText('Normal updates · readings arrive in batches.',{exact:true}).waitFor();});
+  await check('switching live view off restores normal updates',async()=>{await liveSwitch.uncheck();await updates.getByText('Monitoring updates arrive in groups.',{exact:false}).waitFor();});
+  await check('live preview expires and releases its lease',async()=>{
+    await page.evaluate(()=>{
+      const original=window.setTimeout;
+      window.setTimeout=(handler,delay,...args)=>{
+        if(delay===300000){window.setTimeout=original;return original(handler,3500,...args);}
+        return original(handler,delay,...args);
+      };
+    });
+    const start=page.waitForResponse(response=>response.url().endsWith('/live-mode')&&response.request().method()==='POST'&&response.request().postDataJSON()?.enabled===true);
+    await liveSwitch.check();
+    const id=(await start).request().postDataJSON().session_id;
+    const release=page.waitForResponse(response=>{
+      if(!response.url().endsWith('/live-mode')||response.request().method()!=='POST')return false;
+      const body=response.request().postDataJSON();
+      return body?.enabled===false&&body.session_id===id;
+    });
+    await updates.getByText('Live updates ended. Normal monitoring has resumed.',{exact:true}).waitFor();
+    assert.equal(await liveSwitch.isChecked(),false);
+    assert.equal((await release).status(),200);
+  });
   offline=true;await check('network outage is visible',()=>page.getByRole('alert').filter({hasText:'Connection lost'}).waitFor({timeout:30000}));offline=false;
   await append(Array.from({length:66},(_,i)=>sample(Date.now()-65000+i*1000,50)));
   streamTimer=setInterval(()=>{streamWork=streamWork.then(()=>append([sample(Date.now(),50)],'monitoring'));},500);
@@ -150,9 +228,20 @@ async function journey(profile,index){
   await check('live alert link preserves physical device filter',async()=>{await page.getByRole('heading',{name:'Drain running too long',exact:true}).waitFor();assert.equal(await page.getByLabel('Data',{exact:true}).inputValue(),'sensor');assert.equal(await page.getByLabel('Unit',{exact:true}).inputValue(),fixture);});
   assert.equal(await page.getByRole('heading',{name:'Drain time not measured',exact:true}).count(),0);
   await layout('alerts');await page.getByRole('button',{name:'Acknowledge',exact:true}).first().click();await check('acknowledgment persists after reload',async()=>{await page.reload();await page.getByRole('checkbox',{name:'Show acknowledged'}).check();await page.getByRole('button',{name:'Mark unread',exact:true}).first().waitFor();});
-  await page.getByRole('link',{name:'View recording →',exact:true}).first().click();await page.waitForURL('**/live-demo?**');await layout('alert-recording');
+  await page.getByRole('link',{name:'View recording →',exact:true}).first().click();await page.waitForURL('**/live-demo?**');
+  await page.getByRole('button',{name:'Save SMS settings',exact:true}).waitFor();
+  await layout('alert-recording');
   await page.goto(`${origin}/add-unit?fixture=${fixture}`);await check('completed setup resumes without retraining',()=>page.getByRole('heading',{name:`${fixture} is ready`}).waitFor());
-  await page.goto(origin+'/dashboard');await page.getByRole('heading',{name:'Dashboard'}).waitFor();await layout('dashboard');
+  await check('dashboard fetches compact fleet summaries without loading raw recordings',async()=>{
+    const calls=new Set();const observe=req=>{const path=new URL(req.url()).pathname;if(path.startsWith('/api/backend/'))calls.add(path);};
+    page.on('request',observe);
+    try{
+      const loaded=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/api/v1/fleet')&&r.status()===200);
+      await page.goto(origin+'/dashboard');await loaded;
+      await page.getByRole('heading',{name:'Dashboard'}).waitFor();await layout('dashboard');
+      assert.deepEqual([...calls],['/api/backend/api/v1/fleet']);
+    }finally{page.off('request',observe);}
+  });
   await page.goto(origin+'/heat-map');await page.getByRole('heading',{name:'Heat map',exact:true}).waitFor();await layout('heat-map');
   await page.goto(origin+'/');await layout('home');
   await page.goto(origin+'/add-unit');await page.getByLabel('Unit ID',{exact:true}).fill(fixture);await page.getByLabel('Location',{exact:true}).fill('Kitchen');await page.getByRole('button',{name:'Add and continue'}).click();

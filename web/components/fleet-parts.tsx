@@ -13,7 +13,7 @@ export function FleetFilters({fixtures,value,onChange}:{fixtures:FixtureCard[];v
  return <div className={styles.chips} role="group" aria-label="Filter units by status">{categories.map(c=><button key={c.id} className={styles.chip} aria-pressed={value===c.id} onClick={()=>onChange(c.id)}>{c.id!=='all'&&<i className={styles[c.id]}/>}<span>{c.label}</span><small>{c.id==='all'?fixtures.length:fixtures.filter(f=>f.category===c.id).length}</small></button>)}</div>;
 }
 export function FleetSparkline({fixture,large=false}:{fixture:FixtureCard;large?:boolean}){
- const values=fixture.history.filter(r=>r.result?.outcome==='completed'&&r.result.drainage_time_seconds!=null).slice(0,12).reverse().map(r=>r.result!.drainage_time_seconds!);
+ const values=fixture.history.map(drain=>drain.seconds).reverse();
  if(values.length<2)return <span className={styles.historyNote}>History building</span>;
  const low=Math.min(...values)*.85,span=Math.max(1,Math.max(...values)-low);
  return <svg viewBox="0 0 110 30" width={large?312:110} height={large?85:30} role="img" aria-label={`Recent drain times: ${values.map(v=>v.toFixed(1)).join(', ')} seconds`}><polyline points={values.map((v,i)=>`${i/(values.length-1)*108+1},${28-(v-low)/span*24}`).join(' ')} fill="none" stroke={fixture.category==='high'?'#e8702a':'#2563ae'} strokeWidth="2"/></svg>;
@@ -29,4 +29,14 @@ export function FixtureTile({fixture,source,compact=false}:{fixture:FixtureCard;
   {f.category==='baseline'?<><p>Not taught yet. Record a flush and a drain to start monitoring.</p><a className={styles.secondary} href={`/add-unit?fixture=${encodeURIComponent(f.id)}`}>Teach baseline</a></>:<div className={styles.tileValue}><strong>{f.seconds==null?'—':f.seconds.toFixed(f.seconds>=100?0:1)}<small>s</small></strong><div><FleetSparkline fixture={f}/><span>{f.seconds!=null&&f.usual!=null?`${f.seconds-f.usual>=0?'+':''}${(f.seconds-f.usual).toFixed(1)} s vs baseline`:'Baseline learning'}</span></div></div>}
   </div>
  </article>;
+}
+
+export function FleetPagination({hasPrevious,hasNext,previousPage,nextPage,loading}: {
+ hasPrevious:boolean;hasNext:boolean;previousPage:()=>void;nextPage:()=>void;loading:boolean;
+}) {
+ if(!hasPrevious&&!hasNext)return null;
+ return <nav className={styles.tools} aria-label="Fleet pages">
+   <button disabled={!hasPrevious||loading} onClick={previousPage}>Previous units</button>
+   <button disabled={!hasNext||loading} onClick={nextPage}>Next units</button>
+ </nav>;
 }

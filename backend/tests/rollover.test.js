@@ -3,8 +3,8 @@ import {createCloudHandler} from '../../supabase/functions/_shared/cloud-handler
 import {SQLiteRecordStore} from '../src/records-storage.js';
 import {createStore} from '../src/storage.js';
 import {configFromEnv} from '../src/config.js';
-import {SETTINGS} from '../src/records-domain.js';
-import {completedEventRows} from '../../supabase/functions/_shared/rollover.js';
+import {SETTINGS,drainCycleSummaries} from '../src/records-domain.js';
+import {completedEventRows,withMonitoringCarry} from '../../supabase/functions/_shared/rollover.js';
 import {point,time,EMPTY,DRAIN_DEPTHS} from './helpers/drainage-fixtures.js';
 
 const admin='a'.repeat(32);
@@ -63,5 +63,95 @@ test('each completed drain is saved once, and the history endpoint returns bound
  assert.equal((await call('/history?fixture_id=sink&range=5y',admin)).status,422);
  assert.equal((await call('/history?fixture_id=sink&range=1w','nope')).status,401);
  assert.equal((await call('/history?fixture_id=bad id!',admin)).status,422);
- const plain=await harness();assert.equal((await plain.call('/history?fixture_id=sink&range=1w',admin)).data.error.code,'history_unavailable');
+ const plain=await harness();assert.deepEqual((await plain.call('/history?fixture_id=sink&range=1w',admin)).data.points,[]);
+});
+
+test('an open drain keeps its start, duration and raw evidence across rollover',async()=>{
+ const {store,call,key}=await harness();
+ const depths=[...Array(4994).fill(0),0,10,30,45,45,45,40,35,30,25,20,14,9,5,3,0,0,0,0,0,0,0];
+ const samples=depths.map((depth,i)=>point(time+i*500,depth));
+ const old=monitoring(samples.slice(0,5000));
+ await store.insert(old);
+ const expected=drainCycleSummaries({...old,measurements:samples})[0];
+ assert.equal(expected.drainage_time_seconds,5);
+ const path=`/records/${old.record_id}/measurements`;
+ const payload={measurements:samples.slice(4999)};
+ const responses=await Promise.all([call(path,key,payload),call(path,key,payload)]);
+ assert.deepEqual(responses.map(r=>r.status).sort(),[200,201]);
+ const id=responses[0].data.continued_in;
+ assert.equal(responses[1].data.continued_in,id);
+ const former=await call(`/records/${old.record_id}`,admin);
+ const latest=await call(`/records/${id}`,admin);
+ assert.deepEqual(former.data.computed.drain_cycles,[]);
+ assert.deepEqual(latest.data.computed.drain_cycles,[expected]);
+ assert.deepEqual(former.data.record.measurements,samples.slice(0,5000));
+ assert.deepEqual(latest.data.record.measurements,samples.slice(5000));
+ assert.equal(former.data.record.continued_in,id);
+ assert.equal(latest.data.record.continued_from,old.record_id);
+ const history=await call('/history?fixture_id=sink&range=all',admin);
+ assert.deepEqual(history.data.points.map(p=>p.avg_seconds),[5]);
+ const conflicting={...samples[4999],sensor:{distance_mm:123,status:'ok'}};
+ assert.equal((await call(path,key,conflicting)).data.error.code,'reading_conflict');
+ await store.close();
+});
+
+test('a full manually finished recording is not forwarded to a later manual session',async()=>{
+ const {store,call,key}=await harness();
+ const old=monitoring(readings(SETTINGS.maxMeasurements),{recording_status:'finished'});
+ await store.insert(old);
+ const next=monitoring([]);await store.insert(next);
+ const posted=await call(`/records/${old.record_id}/measurements`,key,readings(1,SETTINGS.maxMeasurements)[0]);
+ assert.equal(posted.data.error.code,'record_finished');
+ assert.deepEqual((await store.get(next.record_id)).measurements,[]);
+ await store.close();
+});
+
+test('missing time at rollover is not reported as a faster completed drain',async()=>{
+ const {store,call,key}=await harness();
+ const before=[...readings(4996),...readings(4,4996,40)];
+ const old=monitoring(before);await store.insert(old);
+ const after=[40,30,20,4,0,0,0].map((depth,i)=>point(time+5000*500+30000+i*500,depth));
+ const posted=await call(`/records/${old.record_id}/measurements`,key,{measurements:after});
+ assert.equal(posted.status,201);
+ const latest=await call(`/records/${posted.data.continued_in}`,admin);
+ assert.equal(latest.data.computed.drain_cycles[0].outcome,'uncertain');
+ assert.equal(latest.data.computed.drain_cycles[0].drainage_time_seconds,null);
+ assert.deepEqual((await call('/history?fixture_id=sink&range=all',admin)).data.points,[]);
+ await store.close();
+});
+
+test('a confirmed dry interval bounds the history needed at rollover',async()=>{
+ const previous=monitoring(readings(10),{continued_from:randomUUID(),recording_status:'finished'});
+ const current=monitoring(readings(5,10),{continued_from:previous.record_id});
+ previous.continued_in=current.record_id;
+ const visited=[];
+ const view=await withMonitoringCarry({get:async id=>{visited.push(id);return id===previous.record_id?previous:null;}},current);
+ assert.deepEqual(visited,[previous.record_id]);
+ assert.deepEqual(view.measurements,current.measurements);
+});
+
+test('fleet pages use saved drain summaries and leave raw records behind the detail route',async()=>{
+ const {store,call,key}=await harness();
+ assert.equal((await call('/devices',admin,{device_id:'another',name:'Other location'})).status,201);
+ const row=monitoring([]);await store.insert(row);
+ const capture=DRAIN_DEPTHS.map((depth,i)=>point(time+i*500,depth));
+ assert.equal((await call(`/records/${row.record_id}/measurements`,key,{measurements:capture})).status,201);
+ const get=store.get.bind(store),list=store.list.bind(store);
+ store.get=store.list=()=>{throw Error('fleet must not hydrate records');};
+ const first=await call('/fleet?limit=1',admin);
+ assert.equal(first.status,200);assert.equal(first.data.next_cursor,'another');
+ const page=await call('/fleet?limit=1&after=another',admin);
+ assert.equal(page.status,200);assert.equal(page.data.next_cursor,null);
+ const [unit]=page.data.units;
+ assert.equal(unit.record.record_id,row.record_id);
+ assert.equal(unit.last_reading_at,capture.at(-1).timestamp);
+ assert.ok(unit.empty_ready);
+ assert.equal(unit.recent_drains.length,1);
+ assert.equal(unit.recent_drains[0].record_id,row.record_id);
+ assert.equal('measurements' in unit.record,false);
+ assert.equal((await call('/fleet?q=LocAtion',admin)).data.units[0].device_id,'another');
+ assert.equal((await call('/fleet',key)).status,403);
+ store.get=get;store.list=list;
+ assert.deepEqual((await call(`/records/${row.record_id}`,admin)).data.record.measurements,capture);
+ await store.close();
 });
