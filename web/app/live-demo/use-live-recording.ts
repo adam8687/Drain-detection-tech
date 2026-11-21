@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DrainApi, DrainApiError } from '../../lib/api';
 import type { DataSource, RecordSummary, RecordView } from '../../lib/api';
 import { selectDeviceRecord, mergeLiveView } from '../../lib/chart-data';
 import { useSession } from '../../lib/supabase';
-import { useLiveMode } from '../../lib/use-live-mode';
+import { LIVE_DEMO_DURATION_MS, LIVE_RECORD_POLL_MS, useLiveMode } from '../../lib/use-live-mode';
 
 export function useLiveRecording(initialFixture = '', initialRecord = '', initialSource: DataSource = 'sensor') {
   const session = useSession();
@@ -21,7 +21,9 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   const [loading, setLoading] = useState(true);
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [demo,setDemo]=useState(false);
+  const [demoState, setDemoState] = useState<'off' | 'running' | 'expired'>('off');
+  const demo = demoState === 'running';
+  const cachedView = useRef<{ api: DrainApi; view: RecordView } | null>(null);
 
   function reportError(err: unknown) {
     setNeedsAuth(err instanceof DrainApiError && err.status === 401);
@@ -35,7 +37,8 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
     async function loadSummaries() {
       if(document.hidden){timer=setTimeout(()=>void loadSummaries(),1000);return;}
       try {
-        const [registry, summaries] = await Promise.allSettled([api.devices(controller.signal), api.recordSummaries(source, controller.signal)]);
+        const [registry, summaries] = await Promise.allSettled([api.devices(controller.signal), fixtureChoice
+          ? api.records(fixtureChoice,source,controller.signal) : api.recordSummaries(source,controller.signal)]);
         if (controller.signal.aborted) return;
         if (summaries.status === 'rejected') throw summaries.reason;
         // Names are optional metadata; a registry outage must not hide recordings.
@@ -48,7 +51,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
     }
     void loadSummaries();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, source, refresh]);
+  }, [api, source, refresh, fixtureChoice]);
 
   const fixtures = useMemo(() => {
     const names = new Map(devices.map(d => [d.device_id, d.name]));
@@ -57,38 +60,59 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   }, [devices, records]);
   const fixture = fixtures.some(f => f.id === fixtureChoice) ? fixtureChoice : records[0]?.fixture_id || fixtures[0]?.id || '';
   const fixtureRecords = useMemo(() => records.filter(r => r.fixture_id === fixture), [records, fixture]);
-  const recordId = selectDeviceRecord(fixtureRecords, recordChoice);
+  const recordId = fixture ? recordChoice || selectDeviceRecord(fixtureRecords) : '';
   const live=useLiveMode(api,fixture,demo&&source==='sensor'&&Boolean(recordId),'demo');
-  useEffect(()=>setDemo(false),[fixture,source,recordId]);
+  useEffect(() => setDemoState('off'), [fixture, source]);
+  useEffect(() => {
+    if (!demo) return;
+    const timer = setTimeout(() => setDemoState('expired'), LIVE_DEMO_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [demo]);
 
   useEffect(() => {
     if (!recordId) { setView(null); setLoadingRecord(false); return; }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    setView(null); setLoadingRecord(true);
-    let previousView:RecordView|null=null;
+    const cached = cachedView.current;
+    let previousView = cached?.api === api && cached.view.record.record_id === recordId ? cached.view : null;
+    if (!previousView) { setView(null); setLoadingRecord(true); }
     async function load() {
       if(document.hidden){timer=setTimeout(()=>void load(),1000);return;}
       try {
         const next = await api.record(recordId, null, controller.signal, 120, previousView?.record.measurements.at(-1)?.reading_id);
         if (controller.signal.aborted) return;
-        previousView=mergeLiveView(previousView,next);setView(previousView); setError(''); setNeedsAuth(false); setLoadingRecord(false);
+        if (next.record.fixture_id !== fixture || next.record.data_source !== source) {
+          throw new DrainApiError(404,'record_not_found','This recording belongs to a different unit or data source.');
+        }
+        const wasRecording = previousView?.record.recording_status === 'recording';
+        previousView = mergeLiveView(previousView, next);
+        cachedView.current = { api, view: previousView };
+        setView(previousView); setError(''); setNeedsAuth(false); setLoadingRecord(false);
         setRecords(previous => previous.map(record => record.record_id === recordId
           ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.computed.sample_count, calibration: next.record.calibration, drain_status: next.computed.drain_status,drain_cycles:next.computed.drain_cycles }
           : record));
-        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), live.active?750:idle?15000:3000);}else setDemo(false);
+        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), live.active?LIVE_RECORD_POLL_MS:idle?15000:3000);}else {
+          if(wasRecording&&next.record.continued_in){setRecordChoice(next.record.continued_in);}
+          else setDemoState('off');
+        }
       } catch (err) {
         if (!controller.signal.aborted) {
-          setView(null); setLoadingRecord(false); reportError(err);
+          if (err instanceof DrainApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+            previousView = null;
+            cachedView.current = null;
+            setView(null);
+          }
+          setLoadingRecord(false); reportError(err);
           timer = setTimeout(() => void load(), 5000);
         }
       }
     }
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, recordId, refresh,live.active]);
+  }, [api, recordId, fixture, source, refresh,live.active]);
 
-  return { source, setSource, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
-    records: fixtureRecords, recordId, setRecordId: setRecordChoice, view, error, needsAuth,demo,setDemo,live,
+  return { source, setSource: (value: DataSource) => { setRecordChoice(''); setSource(value); }, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
+    records: fixtureRecords, recordId, setRecordId: (id: string) => { setDemoState('off'); setRecordChoice(id); },
+    view: view?.record.record_id === recordId ? view : null, error, needsAuth, demo, demoExpired: demoState === 'expired', setDemo: (enabled: boolean) => setDemoState(enabled ? 'running' : 'off'), live,
     loading: loading || loadingRecord, refresh: () => setRefresh(n => n + 1) };
 }

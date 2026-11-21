@@ -13,15 +13,22 @@ export interface DrainResult { drainage_time_seconds: number | null; outcome: 'c
 export type DrainStatusLabel = 'learning' | 'unknown' | 'in_progress' | 'normal' | 'slow_drain' | 'running_too_long';
 export interface DrainStatus { status: DrainStatusLabel; baseline_seconds: number | null; ratio: number | null; elapsed_seconds: number | null; slow_threshold_seconds: number | null; timeout_threshold_seconds: number | null; baseline_count: number; baseline_record_ids: string[]; baseline_depth_mm: number | null; repeated_slow: boolean; message: string; empty_shift_mm?: number | null; baseline_source?: 'drainage_profile' | 'learned_drains' | null; tolerance_seconds?: number; severe_threshold_seconds?: number; severe?: boolean; matched_bands?: { from_depth_mm: number; to_depth_mm: number; observed_seconds: number; expected_seconds: number; slow_seconds: number }[] }
 export interface DrainCycle { cycle_id:string; started_at:string; ended_at:string; drainage_time_seconds:number|null; outcome:'completed'|'incomplete'|'uncertain' }
-export interface RecordSummary { schema_version?:1|2; parent_record_id?:string; drain_cycles?:DrainCycle[]; record_id: string; fixture_id: string; record_type: RecordType; data_source: DataSource; recording_status: 'recording' | 'finished'; calibration: Calibration | null; result: DrainResult | null; created_at: string; measurement_count: number; drain_status: DrainStatus | null }
+export interface RecordSummary { schema_version?:1|2; parent_record_id?:string; continued_from?:string; continued_in?:string; drain_cycles?:DrainCycle[]; record_id: string; fixture_id: string; record_type: RecordType; data_source: DataSource; recording_status: 'recording' | 'finished'; calibration: Calibration | null; result: DrainResult | null; created_at: string; measurement_count: number; drain_status: DrainStatus | null }
 export interface DrainRecord extends Omit<RecordSummary, 'measurement_count' | 'drain_status'> { measurements: Measurement[] }
 export interface WaterLevelPoint { elapsed_seconds: number; depth_mm: number | null; gap_before: boolean }
-export interface RecordView { record: DrainRecord; computed: { series_mode?:'append'|'replace'; drain_cycles?:DrainCycle[]; monitoring_limits?: {slow_seconds:number; standing_water_seconds:number}; sensor_connection?: 'waiting'|'problem'|'stale'|'connected'; setup_guidance?: {phase:'needs_calibration'|'waiting'|'sensor_problem'|'add_water'|'water_ready'; message:string; water_depth_mm:number|null; target_depth_mm:number}; forecast: { state: 'forecast' | 'dry' | 'unavailable'; seconds_remaining: number | null; message: string }; timeline: { elapsed_seconds: number; seconds_remaining: number | null }[]; water_levels?: WaterLevelPoint[]; sample_index: number; sample_count: number; first_measurement_at?:string|null; elapsed_seconds: number; stale: boolean; calibration_progress: number | null; calibration_message: string | null; drain_status: DrainStatus | null } }
+export interface RecordView { record: DrainRecord; computed: { series_mode?:'append'|'replace'; drain_cycles?:DrainCycle[]; monitoring_limits?: {slow_seconds:number; standing_water_seconds:number}; sensor_connection?: 'waiting'|'problem'|'stale'|'connected'; setup_signal?: 'waiting'|'checking'|'unstable'|'stale'|'steady'; setup_guidance?: {phase:'needs_calibration'|'waiting'|'sensor_problem'|'add_water'|'confirm_water'|'water_ready'; message:string; water_depth_mm:number|null; target_depth_mm:number}; forecast: { state: 'forecast' | 'dry' | 'unavailable'; seconds_remaining: number | null; message: string }; timeline: { elapsed_seconds: number; seconds_remaining: number | null }[]; water_levels?: WaterLevelPoint[]; sample_index: number; sample_count: number; first_measurement_at?:string|null; elapsed_seconds: number; stale: boolean; calibration_progress: number | null; calibration_message: string | null; drain_status: DrainStatus | null } }
 export type AlertSeverity = 'critical' | 'warning' | 'info';
 export type AlertType = 'running_too_long' | 'slow_drain' | 'worsening_trend' | 'unreliable_result' | 'sensor_faults' | 'device_silent' | 'empty_level_shift';
 export interface DrainAlert { alert_id: string; type: AlertType; severity: AlertSeverity; title: string; message: string; occurred_at: string; fixture_id: string; data_source: DataSource; record_id: string; record_type: RecordType; details: Record<string, unknown> }
 export interface AlertSummary { total: number; critical: number; warning: number; info: number }
 export interface AlertList { summary: AlertSummary; alerts: DrainAlert[]; generated_at: string }
+export interface FleetDrain { seconds: number; started_at: string; record_id: string }
+export interface FleetSummary {
+  device_id: string; name: string;
+  record: Pick<RecordSummary,'record_id'|'record_type'|'recording_status'|'created_at'|'schema_version'> | null;
+  empty_ready: boolean; recent_drains: FleetDrain[]; last_reading_at: string | null;
+  drain_status: DrainStatus | null; alerts: Pick<DrainAlert,'type'|'severity'>[]; alert_count: number;
+}
 export class DrainApiError extends Error { status: number; code: string; constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; } }
 export class DrainApi {
   baseUrl: string; token: string; fetcher: typeof fetch;
@@ -39,6 +46,12 @@ export class DrainApi {
   }
   register(device_id: string, name: string) { return this.request<{device_id: string}>('/devices', 'POST', {device_id, name}); }
   devices(signal?: AbortSignal) { return this.request<{ devices: { device_id: string; name: string }[] }>('/devices', 'GET', undefined, signal); }
+  fleet(source: DataSource, after: string, search = '', signal?: AbortSignal) {
+    const query = new URLSearchParams({data_source:source});
+    if(after)query.set('after',after);
+    if(search)query.set('q',search);
+    return this.request<{units:FleetSummary[];next_cursor:string|null}>(`/fleet?${query}`,'GET',undefined,signal);
+  }
   liveMode(fixture:string,signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'GET',undefined,signal);}
   setLiveMode(fixture:string,session_id:string,enabled:boolean,reason:'demo'|'calibration',signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'POST',{session_id,enabled,reason},signal);}
   releaseLiveMode(fixture:string,session_id:string,reason:'demo'|'calibration'){return this.fetcher(`${this.baseUrl}/api/v1/devices/${encodeURIComponent(fixture)}/live-mode`,{method:'POST',keepalive:true,cache:'no-store',headers:{'Content-Type':'application/json',...(this.token?{Authorization:`Bearer ${this.token}`}:{})},body:JSON.stringify({session_id,enabled:false,reason})});}

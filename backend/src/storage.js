@@ -90,6 +90,13 @@ export class SQLiteStore extends FixtureCalibrationStore {
     return this.db.prepare(`SELECT payload FROM dm_${table}${conditions.length ? ' WHERE ' + conditions.join(' AND ') : ''} ORDER BY ${order} DESC, ${tables[table].key} DESC LIMIT ?`)
       .all(...params, limit).map(r => JSON.parse(r.payload));
   }
+  async fleetDevices(who, after, search, limit) {
+    return this.db.prepare(`SELECT d.device_id, coalesce(json_extract(d.payload,'$.name'),d.device_id) name
+      FROM dm_devices d WHERE d.device_id>? AND (? OR d.device_id=? OR EXISTS (
+        SELECT 1 FROM dm_device_members m WHERE m.user_id=? AND m.device_id=d.device_id))
+      AND (?='' OR instr(lower(d.device_id||' '||coalesce(json_extract(d.payload,'$.name'),'')),lower(?))>0)
+      ORDER BY d.device_id LIMIT ?`).all(after,who.admin?1:0,who.viewerFixture??null,who.userId??null,search,search,limit);
+  }
   async insert(table, payload) {
     const { columns } = definition(table);
     try {

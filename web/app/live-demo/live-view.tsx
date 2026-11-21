@@ -1,11 +1,11 @@
 'use client';
 
 import EmailSettings from '../../components/email-settings';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ProductHeader from '../../components/product-header';
 import OceanWaves from '../../components/ocean-waves';
 import DesignAsset from '../../components/design-asset';
-import type { DataSource } from '../../lib/api';
+import type { DataSource, Measurement } from '../../lib/api';
 import { useLiveRecording } from './use-live-recording';
 import { DrainForecastChart, HistoryChart, RawDistanceChart, WaterLevelChart } from './charts';
 import styles from './page.module.css';
@@ -13,6 +13,50 @@ import styles from './page.module.css';
 
 const statusLabels = { learning: 'Empty baseline needed', unknown: 'Status unavailable', in_progress: 'Draining', normal: 'Normal', slow_drain: 'Slow drain', running_too_long: 'Running too long' };
 const date = (value: string) => new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const readingTime = (value: string) => new Date(value).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+const FAST_READING_MAX_AGE_MS = 3000;
+
+function ReadingUpdates({ recording, fast, enabled, expired, status, recent, depth, unavailable, onToggle }: {
+  recording: boolean; fast: boolean; enabled: boolean; expired: boolean; status: string; recent?: Measurement;
+  depth: number | null; unavailable: boolean; onToggle: (enabled: boolean) => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!recording) return;
+    const update = () => { if (!document.hidden) setNow(Date.now()); };
+    update();
+    const timer = setInterval(update, 500);
+    document.addEventListener('visibilitychange', update);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', update); };
+  }, [recording]);
+
+  const ageMs = recent ? Math.max(0, now - Date.parse(recent.timestamp)) : null;
+  const ageSeconds = ageMs === null ? null : Math.floor(ageMs / 1000);
+  const age = ageSeconds === null ? '' : ageSeconds === 0 ? 'less than 1 second ago'
+    : ageSeconds === 1 ? '1 second ago' : ageSeconds >= 60 ? 'over a minute ago' : `${ageSeconds} seconds ago`;
+  let message = 'Monitoring updates arrive in groups. When the sink is idle, a change can take around 20 seconds to appear.';
+  if (!recording && !enabled) message = recent ? 'Viewing a saved recording.' : 'Select an active recording to watch for updates.';
+  else if (unavailable) message = 'Connection interrupted. Showing the last available readings.';
+  else if (expired) message = 'Live updates ended. Normal monitoring has resumed.';
+  else if (enabled) {
+    if (!fast) message = status;
+    else if (ageMs === null) message = 'Fast updates connected. Waiting for the first reading.';
+    else if (ageMs > FAST_READING_MAX_AGE_MS) message = 'Readings are delayed. Check that the unit is powered on and connected.';
+    else if (recent?.sensor.status !== 'ok') message = 'The unit is responding. Check that the sensor is clear and secure.';
+    else message = 'Live readings are arriving.';
+  }
+
+  return <section className={styles.card} aria-label="Reading updates">
+    <label><input type="checkbox" role="switch" aria-label="Live updates" checked={enabled} disabled={!recording && !enabled} onChange={event => onToggle(event.target.checked)}/> Live updates</label>
+    <p role="status">{message}</p>
+    {recent && <p className={styles.caption}>
+      Last reading at <time dateTime={recent.timestamp}>{readingTime(recent.timestamp)}</time>
+      {recording && age && ` · ${age}`}
+      {depth !== null && ` · Water level ${Math.round(depth)} mm`}
+    </p>}
+    <p className={styles.caption}>Live updates run for up to five minutes while this page is visible. Turn them on again when you need them.</p>
+  </section>;
+}
 
 export default function LiveView({ initialFixture = '', initialRecord = '', initialSource = 'sensor' }: { initialFixture?: string; initialRecord?: string; initialSource?: DataSource }) {
   const data = useLiveRecording(initialFixture, initialRecord, initialSource);
@@ -24,13 +68,20 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
   const levels = view?.computed.water_levels ?? [];
   const rawReadings = view?.record.measurements ?? [];
   const hasLevels = levels.some(p => p.depth_mm !== null);
-  const duration = view?.record.result?.drainage_time_seconds;
+  const hasDistances = rawReadings.some(r => r.sensor.status === 'ok' && r.sensor.distance_mm !== null);
+  const hasChart = hasLevels || hasDistances;
+  const distance = recent?.sensor.status === 'ok' ? recent.sensor.distance_mm : null;
+  const reading = hasLevels ? levels.at(-1)?.depth_mm : distance;
+  const lastCycle = view?.computed.drain_cycles?.findLast(cycle => cycle.outcome === 'completed' && cycle.drainage_time_seconds !== null);
+  const result = view?.record.result;
+  const duration = result?.outcome === 'completed' ? result.drainage_time_seconds : lastCycle?.drainage_time_seconds;
   const active = view?.record.recording_status === 'recording';
   const drainStatus = view?.computed.drain_status;
   const baseline = drainStatus?.baseline_seconds;
   const drainLabel=drainStatus?.status==='in_progress'&&drainStatus.elapsed_seconds===null?'Monitoring':drainStatus?statusLabels[drainStatus.status]:'';
-  const status = !view ? 'No recording' : active && view.computed.stale ? 'Waiting for data' : drainStatus ? drainLabel : active ? 'Recording' : view.record.result?.outcome || 'Saved recording';
-  const statusMessage = view?.record.record_type === 'calibration' ? view.computed.calibration_message : view?.computed.forecast.message;
+  const status = data.error ? 'Connection interrupted' : !view ? 'No recording' : active && view.computed.stale ? 'Waiting for data' : drainStatus ? drainLabel : active ? 'Recording' : view.record.result?.outcome || 'Saved recording';
+  const calibrating = view?.record.record_type === 'calibration';
+  const needsCalibration = view?.record.record_type === 'monitoring' && !view.record.calibration;
   const fixtureMatches = data.fixtures.filter(f => `${f.name} ${f.id}`.toLowerCase().includes(query.toLowerCase()));
 
   return <>
@@ -58,25 +109,35 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
       <p className={styles.loading} role="status" aria-live="polite">{data.loading ? 'Loading recordings…' : !data.error && !view ? data.fixture ? 'No recordings for this unit yet. Use guided drain setup below to begin.' : 'No units or recordings yet. Add a unit to begin.' : ''}</p>
 
       {data.fixture && <a className={styles.back} href={`/add-unit?fixture=${encodeURIComponent(data.fixture)}`}>Guided drain setup →</a>}
-      {data.fixture&&data.source==='sensor'&&<section className={styles.card} aria-label="Live updates"><label><input type="checkbox" role="switch" aria-label="Live demo" checked={data.demo} disabled={!active&&!data.demo} onChange={event=>data.setDemo(event.target.checked)}/> Live demo</label><p role="status" aria-live="polite">{data.demo?data.live.message:'Normal updates · readings arrive in batches.'}</p><p className={styles.caption}>Live demo sends readings as they arrive while this page is visible. Normal batching resumes automatically after the last live session ends.</p></section>}
+      {data.fixture && data.source === 'sensor' && <ReadingUpdates recording={active} fast={data.live.active} enabled={data.demo} expired={data.demoExpired} status={data.live.message} recent={recent} depth={levels.at(-1)?.depth_mm ?? null} unavailable={Boolean(data.error)} onToggle={data.setDemo}/>}
       {drainStatus && (active || drainStatus.status==='unknown' || drainStatus.status==='learning') && <div className={styles.connection} role={drainStatus.status === 'running_too_long' ? 'alert' : 'status'}><strong>{drainLabel}</strong><p>{drainStatus.message}</p><p>Slow threshold: {drainStatus.slow_threshold_seconds?.toFixed(1)} s · Water-still-present limit: {drainStatus.timeout_threshold_seconds?.toFixed(1)} s</p><a href={`/alerts?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}`}>View alerts →</a></div>}
       <div className={styles.columns} aria-busy={data.loading}>
         <div className={styles.leftColumn}>
           <section className={styles.card} aria-labelledby="last-test">
             <div className={styles.cardHeader}><h2 id="last-test">{view?.record.record_type === 'calibration' ? 'Calibration recording' : view?.record.record_type === 'monitoring' ? 'Monitoring recording' : 'Last drain test'}</h2><span>{view ? date(view.record.created_at) : 'No recording selected'}</span></div>
-            <div className={styles.testBody}>
-              <figure className={styles.tube} aria-hidden="true"><DesignAsset file="f4251.svg"/></figure>
-              <div className={styles.stats}>
-                <p className={styles.caption}>Drain time</p>
-                <p className={styles.duration}><strong style={duration != null && duration.toFixed(1).length >= 5 ? { fontSize: 36 } : undefined}>{duration != null ? duration.toFixed(1) : '—'}</strong><span>s</span></p>
-                <p className={styles.result}>{duration != null ? 'Measured drainage duration' : active ? view?.record.record_type === 'drainage' ? 'Drain test in progress' : 'No completed drain test' : view?.record.result?.outcome || 'Result unavailable'}</p>
-                <p className={styles.normal}>{baseline != null ? `Usual time ${baseline.toFixed(1)} s` : 'Usual time learning'}</p>
-                <p className={styles.caption}>{baseline != null ? 'Usual drain time is learned from comparable completed uses.' : 'Only the empty-sink reference is required for setup.'}</p>
-              </div>
-              {hasLevels ? <WaterLevelChart points={levels} /> : rawReadings.some(r => r.sensor.distance_mm !== null) ? <RawDistanceChart readings={rawReadings} startAt={view?.computed.first_measurement_at} /> : <div className={styles.emptyWater}><p className={styles.caption}>Water level</p><p>{data.loading ? 'Loading measurements…' : 'Calibrated water-level measurements are not available for this recording.'}</p></div>}
-            </div>
-            {statusMessage && <p className={styles.measurementNote}>{statusMessage}</p>}
-            {view && <p className={styles.measurementNote}>Elapsed time starts at the first reading. Drainage duration uses the observed wet-to-dry thresholds; it is not a tap-off timer.</p>}
+            {(view?.record.continued_from || view?.record.continued_in) && <nav aria-label="Monitoring windows" className={styles.measurementNote}>
+              {view.record.continued_from && <a href={`/live-demo?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}&record=${view.record.continued_from}`}>Previous recording window</a>}
+              {view.record.continued_from && view.record.continued_in && ' · '}
+              {view.record.continued_in && <a href={`/live-demo?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}&record=${view.record.continued_in}`}>Next recording window</a>}
+            </nav>}
+            {(hasChart || duration != null) && <dl className={styles.recordingMetrics}>
+              {hasChart && <div>
+                <dt>{hasLevels ? 'Latest water level' : 'Latest sensor distance'}</dt>
+                <dd>{reading != null ? <><strong>{reading.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> <span>mm</span></> : 'No clear reading'}</dd>
+              </div>}
+              {duration != null && <div>
+                <dt>{lastCycle ? 'Last completed drain' : 'Measured drain time'}</dt>
+                <dd><strong>{duration.toFixed(1)}</strong> <span>s</span></dd>
+                {baseline != null && <dd className={styles.caption}>Usual drain time {baseline.toFixed(1)} s</dd>}
+              </div>}
+            </dl>}
+            {hasLevels ? <WaterLevelChart points={levels} /> : hasDistances ? <RawDistanceChart readings={rawReadings} startAt={view?.computed.first_measurement_at} /> : <p className={styles.recordingEmpty}>
+              {data.loading ? 'Loading measurements…' : active ? recent ? 'The sensor is responding, but hasn’t returned a clear distance yet.' : 'Waiting for the first sensor reading.' : 'No sensor readings to show.'}
+            </p>}
+            {calibrating && view.computed.calibration_message && <p className={styles.measurementNote}>{view.computed.calibration_message}</p>}
+            {needsCalibration && <p className={styles.measurementNote}>{data.source === 'sensor' && data.fixture
+              ? <a href={`/add-unit?fixture=${encodeURIComponent(data.fixture)}`}>Calibrate the empty sink</a> : 'This recording needs an empty-sink reference'} to see water level and drain time.</p>}
+            {view?.record.record_type === 'drainage' && duration == null && <p className={styles.measurementNote}>{active ? 'Drain test in progress.' : 'This test ended without a measured drain time.'}</p>}
           </section>
 
           <section className={styles.card} aria-labelledby="history-title">
@@ -134,7 +195,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
               <div><dt>Recording type</dt><dd>{view?.record.record_type || '—'}</dd></div>
               <div><dt>Measurements</dt><dd>{view?.computed.sample_count ?? '—'}</dd></div>
               <div><dt>Empty calibration</dt><dd>{view ? view.record.calibration ? 'Available' : 'Not available' : '—'}</dd></div>
-              <div><dt>Connection</dt><dd>{data.error ? 'Unavailable' : view ? active ? view.computed.stale ? 'Stale readings' : 'Live recording' : 'Saved recording' : '—'}</dd></div>
+              <div><dt>Connection</dt><dd>{data.error ? 'Unavailable' : view ? active ? view.computed.stale ? 'Waiting for readings' : 'Recording in progress' : 'Saved recording' : '—'}</dd></div>
             </dl>
           </section></details>
 

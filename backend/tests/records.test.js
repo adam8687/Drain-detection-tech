@@ -88,7 +88,7 @@ test('single-table storage enforces one active recording and preserves unrelated
   await assert.rejects(() => store.insert(record({})), e => e.status === 409);
   await store.insert(record({ data_source: 'sensor' }));
   assert.equal((await store.list({ fixture_id: 'sink-one' })).length, 2);
-  assert.deepEqual(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name), ['drain_records','drain_email_references','drain_email_preferences','drain_email_outbox']);
+  assert.deepEqual(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name), ['drain_records','drain_email_references','drain_email_preferences','drain_email_outbox','drain_events','drain_record_health']);
 });
 test('API requires empty confirmation and isolates calibration by fixture and data source', async t => {
   const { api } = await fixture(t);

@@ -1,28 +1,99 @@
 import { randomUUID } from 'node:crypto';
-import { SETTINGS, MAX_BATCH, monitoringEvents } from './records-domain.js';
+import { isDeepStrictEqual } from 'node:util';
+import { SETTINGS, MAX_BATCH, MONITORING_PREFIX, appendMeasurements, fail, monitoringCarry, monitoringEvents } from './records-domain.js';
 
-// A board keeps posting to the recording ID baked into its secrets.h. A monitoring recording holds at most
-// SETTINGS.maxMeasurements readings (about 42 minutes at 500 ms). When it is full, finish it and continue in a fresh
-// recording for the same unit, so history spans several recordings and the board never has to be reflashed.
-// Returns the ID the readings should be appended to (the posted ID when no rollover is needed).
-export async function appendTarget({ store, row, mutate, incoming = 1, clock = Date.now }) {
-  if (row.record_type !== 'monitoring') return row.record_id;
-  // Roll over before a batch would overflow, and keep forwarding for a recording that rollover already finished.
-  const overflow = row.measurements.length + incoming > SETTINGS.maxMeasurements;
-  const rolledOver = row.recording_status === 'finished' && row.measurements.length > SETTINGS.maxMeasurements - MAX_BATCH;
-  if (!overflow && !rolledOver) return row.record_id;
-  if (row.recording_status === 'recording') await mutate(row.record_id, previous => previous.recording_status === 'finished' ? { record: previous } : { record: { ...previous, recording_status: 'finished' } });
-  const find = store.headers?.bind(store) ?? store.list.bind(store);
-  const filters = { fixture_id: row.fixture_id, data_source: row.data_source, recording_status: 'recording' };
-  const active = (await find(filters, 1))[0];
-  if (active) return active.record_type === 'monitoring' ? active.record_id : row.record_id;   // never mix into a calibration or drainage
-  try {
-    return (await store.insert({ record_id: randomUUID(), fixture_id: row.fixture_id, record_type: 'monitoring', data_source: row.data_source,
-      recording_status: 'recording', calibration: row.calibration, measurements: [], result: null, created_at: new Date(clock()).toISOString() })).record_id;
-  } catch (error) {
-    if (error.status === 409) { const again = (await find(filters, 1))[0]; if (again?.record_type === 'monitoring') return again.record_id; }
-    throw error;
+const carryCache = new WeakMap();
+
+// Previous windows are immutable once rolled over. Cache just the open drain
+// and its boundary samples. Keep the prefix out of storage and API payloads.
+export async function withMonitoringCarry(store, row) {
+  if (!row.continued_from || !row.calibration || row[MONITORING_PREFIX]) return row;
+  let cache = carryCache.get(store);
+  if (!cache) { cache = new Map(); carryCache.set(store, cache); }
+  let carry = cache.get(row.continued_from);
+  if (!carry) {
+    const previous = await store.get(row.continued_from);
+    if (!previous || previous.continued_in !== row.record_id || previous.fixture_id !== row.fixture_id ||
+        previous.data_source !== row.data_source ||
+        previous.calibration?.empty_distance_mm !== row.calibration.empty_distance_mm) return row;
+    carry = monitoringCarry(previous);
+    if (previous.continued_from && !carry?.reset) {
+      carry = monitoringCarry(await withMonitoringCarry(store,previous));
+    }
+    if (carry && carry.measurements.length <= SETTINGS.maxMeasurements) {
+      cache.set(previous.record_id, carry);
+      if (cache.size > 16) cache.delete(cache.keys().next().value);
+    }
   }
+  return carry ? {...row,[MONITORING_PREFIX]:carry} : row;
+}
+
+function withoutDuplicates(points, records) {
+  const stored = new Map(records.flatMap(row => row.measurements.map(p => [p.reading_id,p])));
+  return points.filter(point => {
+    const prior = stored.get(point.reading_id);
+    if (prior && !isDeepStrictEqual(prior,point)) fail('reading_id was reused with different measurements',409,'reading_conflict');
+    return !prior;
+  });
+}
+
+export async function appendRecordingBatch({store,row,points,mutate,allowRollover,clock=Date.now}) {
+  const posted = row;
+  const rollover = allowRollover && row.record_type === 'monitoring' && row.schema_version !== 1;
+  for (let attempt=0;attempt<12;attempt++) {
+    let target = attempt===0 ? posted : await store.get(posted.record_id);
+    if (rollover && target.recording_status === 'finished' &&
+        (target.continued_in || (!target.rollover_root && target.measurements.length > SETTINGS.maxMeasurements - MAX_BATCH))) {
+      const find = store.headers?.bind(store) ?? store.list.bind(store);
+      const [header] = await find({ fixture_id:posted.fixture_id,data_source:posted.data_source,recording_status:'recording' },1);
+      if (header?.record_type === 'monitoring') {
+        const active = await store.get(header.record_id);
+        if (active?.rollover_root === (target.rollover_root ?? target.record_id) ||
+            (active && !target.continued_in && !target.rollover_root && active.created_at>=target.created_at &&
+             active.calibration?.empty_distance_mm === target.calibration?.empty_distance_mm)) target = active;
+      }
+    }
+    let incoming = points;
+    if (rollover) {
+      const previous = [target];
+      if (posted.record_id !== target.record_id) previous.push(posted);
+      // Retries straddling the boundary can contain IDs from the prior window.
+      // Only inspect sealed windows for points with older timestamps.
+      let link = target.continued_from;
+      let first = target.measurements[0]?.timestamp;
+      while (link && (!first || points.some(p => p.timestamp <= first))) {
+        const sealed = await store.get(link);
+        if (!sealed) break;
+        previous.push(sealed);
+        if (first && sealed.measurements[0]?.timestamp >= first) break;
+        first = sealed.measurements[0]?.timestamp;
+        link = sealed.continued_from;
+      }
+      incoming = withoutDuplicates(points, previous);
+      if (!incoming.length) {
+        await saveNewDrainEvents(store,null,target);
+        return {target:target.record_id,record:target,duplicate:true};
+      }
+      if (target.recording_status === 'recording' && target.measurements.length + incoming.length > SETTINGS.maxMeasurements) {
+        const next = await store.rollMonitoringRecord(target.record_id,randomUUID(),incoming.length,new Date(clock()).toISOString());
+        if (!next || next.recording_status !== 'recording') continue;
+        target = next;
+      }
+    }
+    let before;
+    try {
+      const result = await mutate(target.record_id, previous => {before=previous;return appendMeasurements(previous,incoming);});
+      await saveNewDrainEvents(store,result.duplicate?null:before,result.record);
+      return {...result,target:target.record_id};
+    } catch (error) {
+      if (rollover && (error.code === 'record_full' || error.code === 'record_finished')) {
+        const latest = await store.get(target.record_id);
+        if (error.code === 'record_full' || latest?.continued_in) continue;
+      }
+      throw error;
+    }
+  }
+  fail('Recording is busy; retry with the same reading IDs',409,'concurrent_update');
 }
 
 // One small summary per completed drain. Stable IDs let the same drain be saved any number of times safely.
@@ -37,8 +108,8 @@ export async function saveNewDrainEvents(store, before, after) {
   if (!store.saveDrainEvents || !after) return;
   let pending = pendingHistory.get(store);
   if (!pending) { pending = new Map(); pendingHistory.set(store, pending); }
-  const known = new Set(before ? completedEventRows(before).map(r => r.event_id) : []);
-  for (const event of completedEventRows(after)) if (!known.has(event.event_id)) pending.set(event.event_id,event);
+  const known = new Set(before ? completedEventRows(await withMonitoringCarry(store,before)).map(r => r.event_id) : []);
+  for (const event of completedEventRows(await withMonitoringCarry(store,after))) if (!known.has(event.event_id)) pending.set(event.event_id,event);
   // Retry failed summaries on subsequent uploads, including duplicate uploads.
   // Bound worker memory during a prolonged database outage. The original raw
   // history is never deleted and the reconciliation tool repairs across restarts.
@@ -62,7 +133,7 @@ export async function reconcileDrainHistory(store, {fixture, source='sensor', ap
     for (const header of page) {
       const record = header.measurements ? header : await store.get(header.record_id);
       if (!record) continue;
-      const summaries = completedEventRows(record);
+      const summaries = completedEventRows(await withMonitoringCarry(store,record));
       recordings++;events+=summaries.length;
       if (apply) for (let i=0;i<summaries.length;i+=200) await store.saveDrainEvents(summaries.slice(i,i+200));
     }

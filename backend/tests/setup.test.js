@@ -10,8 +10,24 @@ test('water check needs empty calibration and fresh sensor evidence, not a guess
  assert.equal(setupGuidance(record([]),now).phase,'waiting');
  for(const p of [point('old',50,-15000),point('future',50,1000),point('failed',50,0,true)])assert.equal(setupGuidance(record([p]),now).phase,'sensor_problem');
  assert.equal(setupGuidance(record([point('low',10)]),now).phase,'add_water');
- const ready=setupGuidance(record([point('ready',40)]),now);
+ assert.equal(setupGuidance(record([point('ready',40)]),now).phase,'confirm_water');
+ assert.equal(setupGuidance(record([point('first',40),point('duplicate-time',41)]),now).phase,'confirm_water');
+ assert.equal(setupGuidance(record([point('expired',40,-5100)]),now).phase,'sensor_problem');
+ const ready=setupGuidance(record([point('first',40,-500),point('ready',40)]),now);
  assert.equal(ready.phase,'water_ready');assert.match(ready.message,/Turn the tap off/);assert.equal(ready.water_depth_mm,40);
+});
+test('setup requires three fresh, distinct and steady readings without changing connection status', () => {
+ const newest=Date.now()-500;
+ const sample=(id,depth,ms,failed=false)=>({...point(id,depth,0,failed),timestamp:new Date(newest+ms).toISOString()});
+ const a=sample('A',0,-1000), b=sample('B',2,-500), c=sample('C',4,0);
+ assert.equal(computedView(record([c])).setup_signal,'checking');
+ assert.equal(computedView(record([a,{...b,timestamp:c.timestamp},c])).setup_signal,'checking');
+ assert.equal(computedView(record([a,b,sample('C',20,0)])).setup_signal,'unstable');
+ assert.equal(computedView(record([a,sample('B',0,-500,true),c])).setup_signal,'unstable');
+ assert.equal(computedView(record([a,b,c])).setup_signal,'steady');
+ const delayed=computedView(record([sample('old',0,-6000)]));
+ assert.equal(delayed.setup_signal,'stale');
+ assert.equal(delayed.sensor_connection,'connected');
 });
 test('running water cannot substitute for the empty-basin reference',()=>{
  const filling=Array.from({length:20},(_,i)=>point(String(i),i*3,-10000+i*500));

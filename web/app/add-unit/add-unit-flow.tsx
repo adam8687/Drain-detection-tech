@@ -22,12 +22,18 @@ const STEPS: { id: Exclude<Step, 'done'>; label: string }[] = [{ id: 'add', labe
 const UNIT_PATTERN = '[a-zA-Z0-9_\\-]{1,64}';
 
 const message = (err: unknown, fallback: string) => err instanceof Error ? err.message : fallback;
-const reading = (view: RecordView | null) => {
-  const latest = view?.record.measurements.at(-1);
-  if (!latest) return null;
-  const show = (s: typeof latest.sensor) => s.status === 'ok' ? `${s.distance_mm} mm` : s.status.replace('_', ' ');
-  return `Sensor: ${show(latest.sensor)}`;
-};
+function connectionFeedback(view: RecordView | null, failed: boolean) {
+  if (failed) return { title: 'Connection interrupted', hint: 'The connection test will retry automatically.' };
+  switch (view?.computed.setup_signal ?? view?.computed.sensor_connection) {
+    case 'connected':
+    case 'steady': return { title: 'Sensor connected', hint: 'The sensor is sending steady readings.' };
+    case 'checking': return { title: 'Checking for steady readings…', hint: 'Leave the sink empty and keep the sensor still.' };
+    case 'problem':
+    case 'unstable': return { title: 'Check the sensor', hint: 'Keep the tap off. Make sure the sensor is secure and aimed at the center of the sink with a clear view.' };
+    case 'stale': return { title: 'Readings stopped', hint: 'Check that the unit is powered on and connected.' };
+    default: return { title: 'Waiting for the device…', hint: 'Keep the unit powered on. If it does not connect, ask your installer to check it.' };
+  }
+}
 
 const PhoneIcon = () => <DesignAsset file="30eac.svg" className={styles.methodIcon} />;
 const ServerIcon = () => <DesignAsset file="d1297.svg" className={styles.methodIcon} />;
@@ -47,13 +53,16 @@ export default function AddUnitFlow() {
   const [step,setStep]=useState<Step>('add');
   const [unit,setUnit]=useState(''),[location,setLocation]=useState('');
   const [method,setMethod]=useState<Method>('wifi');
-  const [existing,setExisting]=useState(false),[connected,setConnected]=useState(false),[empty,setEmpty]=useState(false);
+  const [existing,setExisting]=useState(false),[empty,setEmpty]=useState(false);
   const [calibrationId,setCalibrationId]=useState<string|null>(null),[initialObservationId,setInitialObservationId]=useState<string|null>(null);
   const [reference,setReference]=useState<Calibration|null>(null);
   const [recordId,setRecordId]=useState<string|null>(null);
   const [error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [resumeFixture,setResumeFixture]=useState(''),[restoring,setRestoring]=useState(false),[restoreFailed,setRestoreFailed]=useState(false),[retry,setRetry]=useState(0);
   const recording=useRecording(api,recordId);
+  const signal = recording.view?.computed.setup_signal ?? recording.view?.computed.sensor_connection;
+  const connected = !recording.error && (signal === 'steady' || signal === 'connected');
+  const connection = connectionFeedback(recording.view, Boolean(recording.error));
   const authBlocked=Boolean(supabase)&&!session;
   const ready=reference?.drainage?.status==='ready';
   const liveEnabled=!authBlocked&&!restoring&&!restoreFailed&&Boolean(unit)&&['connect','teach','drain'].includes(step);
@@ -71,7 +80,6 @@ export default function AddUnitFlow() {
         if(controller.signal.aborted)return;
         const active=records.find(r=>r.recording_status==='recording');
         const saved=calibrations.find(r=>r.schema_version!==1&&r.calibration);
-        setConnected(false);
         if(active?.record_type==='calibration'){setEmpty(true);setRecordId(active.record_id);setStep('teach');}
         else if(saved?.calibration){setCalibrationId(saved.record_id);setReference(saved.calibration);setRecordId(null);setInitialObservationId(saved.calibration.drainage?.active_capture?.recording_id??(active?.record_type==='monitoring'?active.record_id:null));setStep(saved.calibration.drainage?.status==='ready'?'done':'drain');}
         else{setReference(null);setRecordId(active?.record_type==='monitoring'?active.record_id:null);setStep('connect');}
@@ -83,8 +91,6 @@ export default function AddUnitFlow() {
   },[api,resumeFixture,retry,authBlocked]);
   useEffect(()=>{
     const view=recording.view;if(!view)return;
-    if(view.computed.sensor_connection==='connected')setConnected(true);
-    else if(view.record.recording_status==='recording')setConnected(false);
     if(view.record.record_type!=='calibration'||view.record.recording_status!=='finished')return;
     setRecordId(null);
     if(view.record.calibration){setReference(view.record.calibration);setCalibrationId(view.record.record_id);setInitialObservationId(null);setStep('drain');}
@@ -104,7 +110,7 @@ export default function AddUnitFlow() {
         {authBlocked?<><h1 id="setup-title" tabIndex={-1}>Add a unit</h1><p className={styles.lead}>Sign in to register sensors to your account. Your saved setup will be here when you return.</p><AccountPanel/></>:<>
         {(restoring||restoreFailed)&&<h1 id="setup-title" tabIndex={-1}>Resume unit setup</h1>}{restoring&&<p role="status">Recovering saved setup…</p>}
         {restoreFailed&&<button className={shell.secondary} disabled={restoring} onClick={()=>setRetry(n=>n+1)}>Retry saved setup</button>}
-        {liveEnabled&&<div className={styles.note} role="status" aria-live="polite"><strong>Live calibration</strong><p>{live.message}</p><p>Live updates turn off automatically when setup finishes or you leave this page.</p></div>}
+        {liveEnabled&&<div className={styles.note} role="status"><strong>Live setup updates</strong><p>{live.message}</p></div>}
         {step==='add'&&!restoring&&!restoreFailed&&<form className={styles.form} onSubmit={addUnit}>
           <div><h1 id="setup-title" tabIndex={-1}>Add a unit</h1><p className={styles.lead}>Connect your sensor, record the empty sink, then measure normal drainage.</p></div>
           <label className={styles.field}><span>Unit ID</span><div className={styles.inputWrap}><input aria-label="Unit ID" aria-describedby="unit-hint" required pattern={UNIT_PATTERN} maxLength={64} placeholder="DR-4851" value={unit} onChange={e=>{setUnit(e.target.value.trim());setExisting(false);setError('');}}/><small id="unit-hint">Printed on the sensor</small></div></label>
@@ -115,7 +121,7 @@ export default function AddUnitFlow() {
         </form>}
         {step==='connect'&&!restoring&&!restoreFailed&&<div className={styles.form}>
           <div><h1 id="setup-title" tabIndex={-1}>Connect {unit}</h1><p className={styles.lead}>Leave the unit powered on. We will check its connection, then record the empty sink.</p></div>
-          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={()=>void run(async()=>{setConnected(false);setRecordId((await api.start(unit,'sensor','monitoring')).record_id);},'Could not check the connection.')}>Start connection test</button>:<><div className={`${styles.live} ${connected?styles.ok:''}`} role="status"><strong>{connected?'Sensor connected':(recording.view?.record.measurements.length??0)>0?'Check the sensor':'Waiting for the device…'}</strong><span>{reading(recording.view)??'Keep the unit powered on. If it does not connect, ask your installer to check it.'}</span></div></>}
+          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={()=>void run(async()=>{setRecordId((await api.start(unit,'sensor','monitoring')).record_id);},'Could not check the connection.')}>Start connection test</button>:<div className={`${styles.live} ${connected?styles.ok:''}`} role="status"><strong>{connection.title}</strong><span>{connection.hint}</span></div>}
           <div className={styles.actions}><button className={shell.primary} disabled={!live.active||!connected||busy||!recordId||Boolean(recording.error)} onClick={()=>void run(finishConnection,'Could not finish the connection check.')}>Continue</button><button className={styles.cancel} disabled={busy} onClick={()=>void run(async()=>{if(recordId)await api.finish(recordId);setRecordId(null);setStep('done');},'Could not save setup.')}>Finish later</button></div>
         </div>}
         {step==='teach'&&!restoring&&!restoreFailed&&<div className={styles.form}>
@@ -128,7 +134,7 @@ export default function AddUnitFlow() {
         {step==='done'&&!restoring&&!restoreFailed&&<div className={styles.form}>
           <div><h1 id="setup-title" tabIndex={-1}>{ready?`${unit} is ready`:`${unit} added`}</h1><p className={styles.lead}>{ready?'Empty reference and normal drainage speed saved. You can start monitoring now.':'Your progress is saved. Finish calibration when you are ready.'}</p></div>
           {ready&&<div className={`${styles.live} ${styles.ok}`}><strong>Empty baseline</strong><span>Empty distance: {reference?.empty_distance_mm} mm</span>{reference?.drainage?.profile?.resolution==='instant'?<span>Very fast drain: the water empties almost instantly (under {Math.ceil(reference.drainage.baseline_duration_seconds??1)} s). You will be warned if it ever takes longer than {reference.drainage.profile.total.slow_seconds.toFixed(0)} s.</span>:<><span>Normal drainage: {reference?.drainage?.baseline_duration_seconds?.toFixed(2)} seconds from 30 mm to 10 mm</span><span>Level recession: {reference?.drainage?.baseline_recession_mm_per_second?.toFixed(2)} mm/s</span></>}<p>Two consistent tap-off checks are saved in this unit’s calibration for later alert comparisons.</p></div>}
-          <dl className={styles.summary}><div><dt>Unit ID</dt><dd>{unit}</dd></div><div><dt>Location</dt><dd>{location||'—'}</dd></div><div><dt>Empty sink</dt><dd>{ready?'Baseline saved':'Not recorded yet'}</dd></div></dl>
+          <dl className={styles.summary}><div><dt>Unit ID</dt><dd>{unit}</dd></div><div><dt>Location</dt><dd>{location||'—'}</dd></div><div><dt>Empty sink</dt><dd>{reference?'Baseline saved':'Not recorded yet'}</dd></div></dl>
           <div className={styles.actions}>{ready?<button className={shell.primary} disabled={busy} onClick={()=>void run(async()=>{const{records}=await api.records(unit,'sensor');const active=records.find(r=>r.recording_status==='recording');if(active&&active.record_type!=='monitoring')throw Error('Finish the active recording before starting monitoring.');let next:{record_id:string;calibration:Calibration|null}|undefined=active;if(next&&reference?.drainage?.runs.some(r=>r.recording_id===next!.record_id)){await api.finish(next.record_id);next=undefined;}next??=await api.start(unit,'sensor','monitoring');window.location.assign(`/live-demo?fixture=${encodeURIComponent(unit)}&source=sensor&record=${next.record_id}`);},'Could not start monitoring.')}>{busy?'Starting…':'Start monitoring'}</button>:<a className={shell.primary} href={`/add-unit?fixture=${encodeURIComponent(unit)}`}>Resume setup</a>}<a className={shell.secondary} href="/add-unit">Add another unit</a></div>
         </div>}
         {(error||recording.error)&&<p className={styles.error} role="alert">{error||recording.error}</p>}

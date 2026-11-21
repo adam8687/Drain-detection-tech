@@ -8,8 +8,9 @@ import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
 import { hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { SupabaseRecordStore } from './records-storage.js';
 import { SupabaseAccessStore } from './access-storage.js';
-import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, boundedRecordView, drainStatuses, statusContext, withDrainageProfile, drainCycleSummaries, fail } from './records-domain.js';
-import { appendTarget, saveNewDrainEvents, HISTORY_RANGES, HISTORY_POINTS } from './rollover.js';
+import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, boundedRecordView, drainStatuses, statusContext, withDrainageProfile, drainCycleSummaries, invalidateDrainageProfile, fail } from './records-domain.js';
+import { appendRecordingBatch, saveNewDrainEvents, withMonitoringCarry, HISTORY_RANGES, HISTORY_POINTS } from './rollover.js';
+import { fleetPage, refreshFleetHealth } from './fleet.js';
 import { buildAlerts, summarizeAlerts, SEVERITIES } from './alerts.js';
 
 const equalToken = (a, b) => timingSafeEqual(Buffer.from(hashDeviceKey(a)), Buffer.from(hashDeviceKey(b)));
@@ -37,6 +38,12 @@ export function createCloudHandler(config, {
   notifications = createEmailNotifications({config:config.email??{enabled:false},deliveryStore:new SupabaseEmailStore(config.url,config.serviceKey),accessStore,userEmail:verifiedUserEmail(config.url,config.serviceKey)}),
 } = {}) {
   const liveMode=new LiveModeStore(store,clock);
+  const observeRecording=row=>withMonitoringCarry(store,row);
+  const statusFor=async rows=>statusContext(store,await Promise.all(rows.map(observeRecording)),observeRecording);
+  const refreshHealth=record=>{
+    const work=refreshFleetHealth(store,record);
+    if(config.waitUntil)config.waitUntil(work);else return work;
+  };
   if(config.emailWorkerToken&&config.emailWorkerToken.length<32)throw Error('Email worker token must have at least 32 characters');
   if (config.adminToken && config.adminToken.length < 32) throw Error('Cloud admin token must have at least 32 characters');
   const get = async id => { const row = await store.get(uuid(id, 'record_id')); if (!row) throw new ApiError(404, 'record_not_found', 'Recording not found'); return row; };
@@ -82,7 +89,8 @@ export function createCloudHandler(config, {
     return store.list(filters, limit);
   };
   const mutate = async (id, transform) => {
-    for (let n = 0; n < 12; n++) { const previous = await get(id), response = transform(previous);if(response.record===previous)return response;const events=notifications.enabled&&emailCandidates(response.record).length?await (async()=>{const profiled=await withDrainageProfile(store,response.record);return emailCandidates(profiled,[profiled],Date.now(),await notifications.references(response.record.fixture_id));})():[];if(await store.compareAndSet(previous,response.record,events,notifications.enabled?emailReferenceSamples(response.record):[])){if(events.length)notifications.kick(config.waitUntil);return response;} }
+    for (let n = 0; n < 12; n++) { const previous = await get(id), response = transform(previous);if(response.record===previous)return response;const observed=notifications.enabled?await withMonitoringCarry(store,response.record):response.record;
+      const events=notifications.enabled&&emailCandidates(observed).length?await (async()=>{const profiled=await withDrainageProfile(store,observed);return emailCandidates(profiled,[profiled],Date.now(),await notifications.references(observed.fixture_id));})():[];if(await store.compareAndSet(previous,response.record,events,notifications.enabled?emailReferenceSamples(observed):[])){if(events.length)notifications.kick(config.waitUntil);return response;} }
     throw new ApiError(409, 'concurrent_update', 'Recording is busy; retry with the same reading_id');
   };
   return async request => {
@@ -123,10 +131,11 @@ export function createCloudHandler(config, {
         if(request.headers.get('x-drain-live-capability')==='1')headers['X-Drain-Live-For-Ms']=String(await liveMode.command(who.deviceId,request.headers.get('x-drain-live-active')==='1',null,true));
         return json(200, {record:row ? {record_id:row.record_id,record_type:row.record_type,fixture_id:row.fixture_id} : null});
       }
+      if (path === '/api/v1/fleet' && request.method === 'GET') return json(200,await fleetPage(store,accessStore,who,url.searchParams));
       if (path === '/api/v1/history' && request.method === 'GET') {
         // Per-drain summaries only: at most HISTORY_POINTS rows however long the range, so cost never grows with history.
         const fixture = deviceId(url.searchParams.get('fixture_id') ?? ''), source = url.searchParams.get('data_source') === 'simulation' ? 'simulation' : 'sensor', range = url.searchParams.get('range') ?? '1m';
-        if (!(range in HISTORY_RANGES)) fail('range must be 1d, 1w, 1m, 3m, 1y or all');
+        if (!Object.hasOwn(HISTORY_RANGES,range)) fail('range must be 1d, 1w, 1m, 3m, 1y or all');
         await access(who, fixture);
         if (!store.drainHistory) throw new ApiError(404, 'history_unavailable', 'Drain history is not available on this backend');
         const days = HISTORY_RANGES[range];
@@ -172,9 +181,9 @@ export function createCloudHandler(config, {
         const limit = Number(url.searchParams.get('limit') || 100); if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('limit must be 1–200');
         const severity = url.searchParams.get('severity');
         if (path.endsWith('/alerts') && severity !== null && !SEVERITIES.includes(severity)) fail('Invalid severity');
-        const rows = await visible(who, filters, path.endsWith('/alerts') ? 200 : limit);
-        if (path.endsWith('/alerts')) { const all = buildAlerts(await statusContext(store, rows)); return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => !severity || a.severity === severity).slice(0,limit), generated_at: new Date().toISOString() }); }
-        const statuses = drainStatuses(await statusContext(store, rows));
+        const rows = await Promise.all((await visible(who, filters, path.endsWith('/alerts') ? 200 : limit)).map(row=>withMonitoringCarry(store,row)));
+        if (path.endsWith('/alerts')) { const all = buildAlerts(await statusFor(rows)); return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => !severity || a.severity === severity).slice(0,limit), generated_at: new Date().toISOString() }); }
+        const statuses = drainStatuses(await statusFor(rows));
         return json(200, { records: rows.map(({measurements,...row}) => ({...row, measurement_count:measurements.length, drain_cycles:drainCycleSummaries({...row,measurements}), drain_status:statuses.get(row.record_id) ?? null})) });
       }
       const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish|drainage-calibration))?$/i);
@@ -184,8 +193,9 @@ export function createCloudHandler(config, {
           await access(who, row.fixture_id); const raw = url.searchParams.get('sample'), sample = raw === null ? null : Number(raw);
           if (sample !== null && (!Number.isInteger(sample) || sample < 0)) fail('sample must be nonnegative integer');
           const siblings = ['drainage','monitoring'].includes(row.record_type) ? await store.list({fixture_id:row.fixture_id,data_source:row.data_source},5) : [];
-          const view=boundedRecordView(row,sample,url.searchParams.has('window')?Number(url.searchParams.get('window')):null,url.searchParams.get('after'));
-          return json(200, {...view,computed:{...view.computed,drain_status:drainStatuses(await statusContext(store,[...siblings.filter(r=>r.record_id!==id),row])).get(id)??null}});
+          const observed=await withMonitoringCarry(store,row);
+          const view=boundedRecordView(observed,sample,url.searchParams.has('window')?Number(url.searchParams.get('window')):null,url.searchParams.get('after'));
+          return json(200, {...view,computed:{...view.computed,drain_status:drainStatuses(await statusFor([...siblings.filter(r=>r.record_id!==id),observed])).get(id)??null}});
         }
         if(action==='drainage-calibration'&&request.method==='POST'){
           await access(who,row.fixture_id,true);
@@ -194,6 +204,7 @@ export function createCloudHandler(config, {
           const observation=observationId?await get(observationId):null;
           if(observation)await access(who,observation.fixture_id,true);
           const result=await mutate(id,previous=>({record:updateDrainageCalibration(previous,observation,input,captureId,clock())}));
+          invalidateDrainageProfile(store,result.record);
           return json(200,{record_id:id,calibration:result.record.calibration});
         }
         if (action === 'measurements' && request.method === 'POST') {
@@ -201,9 +212,10 @@ export function createCloudHandler(config, {
           if (who.deviceId && row.data_source !== 'sensor') throw new ApiError(403,'forbidden','Sensor keys cannot append simulation data');
           const points = validateMeasurements(await readBody(request));
           // A full monitoring recording continues in a new one; the acknowledgement keeps the board's own record_id.
-          const target = who.deviceId ? await appendTarget({store,row,mutate,incoming:points.length,clock}) : id; let before = null;
-          const result = await mutate(target, previous => { before = previous; return appendMeasurements(previous,points); });
-          await saveNewDrainEvents(store, before, result.record);
+          const result = await appendRecordingBatch({store,row,mutate,points,allowRollover:Boolean(who.deviceId),clock});
+          const {target}=result;
+          if(result.record.record_type==='calibration'&&result.record.recording_status==='finished'&&!result.duplicate)invalidateDrainageProfile(store,result.record);
+          await refreshHealth(result.record);
           if(who.deviceId&&request.headers.get('x-drain-live-capability')==='1')headers['X-Drain-Live-For-Ms']=String(await liveMode.command(who.deviceId,request.headers.get('x-drain-live-active')==='1',result.record.measurements.at(-1)?.timestamp));
           return json(result.duplicate ? 200 : 201, {...(target!==id?{continued_in:target}:{}),duplicate:result.duplicate,record_id:id,recording_status:result.record.recording_status,measurement_count:result.record.measurements.length,result:result.record.result,calibration:result.record.calibration});
         }
@@ -211,7 +223,8 @@ export function createCloudHandler(config, {
           await access(who,row.fixture_id,true);
           const result = await mutate(id, previous => previous.recording_status === 'finished' ? {record:previous} : {record:{...previous,recording_status:'finished',result:previous.record_type==='drainage' ? analyzeDrainage(previous.measurements,previous.calibration).result : null}});
           await saveNewDrainEvents(store, null, result.record);
-          return json(200,{record:result.record,computed:computedView(result.record)});
+          await refreshHealth(result.record);
+          return json(200,{record:result.record,computed:computedView(await withMonitoringCarry(store,result.record))});
         }
       }
       throw new ApiError(404,'not_found','Unsupported record route');

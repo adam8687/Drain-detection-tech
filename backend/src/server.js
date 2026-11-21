@@ -10,11 +10,12 @@ import { fileURLToPath } from 'node:url';
 import { configFromEnv } from './config.js';
 import { createRecordStore } from './records-storage.js';
 import { buildAlerts, summarizeAlerts, SEVERITIES } from './alerts.js';
-import { appendTarget, saveNewDrainEvents } from '../../supabase/functions/_shared/rollover.js';
+import { appendRecordingBatch, saveNewDrainEvents, withMonitoringCarry, HISTORY_RANGES, HISTORY_POINTS } from '../../supabase/functions/_shared/rollover.js';
+import { fleetPage, refreshFleetHealth } from '../../supabase/functions/_shared/fleet.js';
 import { createStore as createAccessStore } from './storage.js';
 import { DEVICE_KEY_PREFIX, hashDeviceKey, newDeviceKey, supabaseUserVerifier } from './auth.js';
 import { ApiError, uuid, deviceId, validateDevice } from './validation.js';
-import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, boundedRecordView, drainStatuses, statusContext, withDrainageProfile, drainCycleSummaries, fail } from './records-domain.js';
+import { validateRecordInput, validateMeasurements, appendMeasurements, analyzeDrainage, computedView, boundedRecordView, drainStatuses, statusContext, withDrainageProfile, drainCycleSummaries, invalidateDrainageProfile, fail } from './records-domain.js';
 
 const sameToken = (a, b) => timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
 async function body(req) {
@@ -30,6 +31,8 @@ export function createApp(config, store = createRecordStore(config), {
   notifications = createEmailNotifications({config:config.email??{enabled:false},deliveryStore:store.db?new SQLiteEmailStore(store.db):new SupabaseEmailStore(config.supabaseUrl,config.supabaseKey),accessStore,userEmail:verifiedUserEmail(config.supabaseUrl,config.supabaseKey)}),
 } = {}) {
   const liveMode=new LiveModeStore(store,clock);
+  const observeRecording=row=>withMonitoringCarry(store,row);
+  const statusFor=async rows=>statusContext(store,await Promise.all(rows.map(observeRecording)),observeRecording);
   const streams = new Set();
   const authenticate = async req => {
     const header = req.headers.authorization || '';
@@ -63,8 +66,9 @@ export function createApp(config, store = createRecordStore(config), {
     for (let attempt = 0; attempt < 12; attempt++) {
       const previous = await get(id), response = transform(previous);
       if(response.record===previous)return response;
-      const events=notifications.enabled&&emailCandidates(response.record).length?await (async()=>{const profiled=await withDrainageProfile(store,response.record);return emailCandidates(profiled,[profiled],Date.now(),await notifications.references(response.record.fixture_id));})():[];
-      if(await store.compareAndSet(previous,response.record,events,notifications.enabled?emailReferenceSamples(response.record):[])){if(events.length)notifications.kick();return response;}
+      const observed=notifications.enabled?await withMonitoringCarry(store,response.record):response.record;
+      const events=notifications.enabled&&emailCandidates(observed).length?await (async()=>{const profiled=await withDrainageProfile(store,observed);return emailCandidates(profiled,[profiled],Date.now(),await notifications.references(observed.fixture_id));})():[];
+      if(await store.compareAndSet(previous,response.record,events,notifications.enabled?emailReferenceSamples(observed):[])){if(events.length)notifications.kick();return response;}
     }
     throw new ApiError(409, 'concurrent_update', 'Recording is busy; retry using the same reading_id');
   };
@@ -78,7 +82,7 @@ export function createApp(config, store = createRecordStore(config), {
     }
     return store.list(filters, limit);
   };
-  const summaries = async rows => { const statuses = drainStatuses(await statusContext(store, rows)); return rows.map(row => ({ ...summary(row), drain_status: statuses.get(row.record_id) ?? null })); };
+  const summaries = async rows => { const observed = await Promise.all(rows.map(row => withMonitoringCarry(store,row))); const statuses = drainStatuses(await statusFor(observed)); return observed.map(row => ({ ...summary(row), drain_status: statuses.get(row.record_id) ?? null })); };
   const summary = row => ({ ...(row.schema_version===1?{schema_version:1}:{}),record_id: row.record_id, fixture_id: row.fixture_id, record_type: row.record_type, data_source: row.data_source, recording_status: row.recording_status, calibration: row.calibration, result: row.result, created_at: row.created_at, measurement_count: row.measurements.length, drain_cycles:drainCycleSummaries(row) });
   const server = http.createServer(async (req, res) => {
     const requestId = randomUUID(); res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Request-ID', requestId); res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -159,6 +163,15 @@ export function createApp(config, store = createRecordStore(config), {
           return json(201, row);
         }
       }
+      if (path === '/api/v1/fleet' && req.method === 'GET') return json(200,await fleetPage(store,accessStore,who,url.searchParams));
+      if (path === '/api/v1/history' && req.method === 'GET') {
+        const fixture = deviceId(url.searchParams.get('fixture_id'));
+        const source = url.searchParams.get('data_source') ?? 'sensor', range = url.searchParams.get('range') ?? '1m';
+        if (!['sensor','simulation'].includes(source)||!Object.hasOwn(HISTORY_RANGES,range)) fail('Invalid history source or range');
+        await requireAccess(who,fixture);
+        const days=HISTORY_RANGES[range];
+        return json(200,{range,generated_at:new Date().toISOString(),points:await store.drainHistory(fixture,source,new Date(days?Date.now()-days*86400000:0).toISOString(),HISTORY_POINTS)});
+      }
       if (path === '/api/v1/alerts' && req.method === 'GET') {
         const filters = {};
         if (url.searchParams.has('fixture_id')) filters.fixture_id = deviceId(url.searchParams.get('fixture_id'));
@@ -166,18 +179,20 @@ export function createApp(config, store = createRecordStore(config), {
         const severity = url.searchParams.get('severity');
         if (severity !== null && !SEVERITIES.includes(severity)) fail('severity must be critical, warning or info');
         const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail('limit must be 1–200');
-        const all = buildAlerts(await statusContext(store, await visibleRows(who, filters, 200)));
+        const rows=await Promise.all((await visibleRows(who,filters,200)).map(row=>withMonitoringCarry(store,row)));
+        const all = buildAlerts(await statusFor(rows));
         return json(200, { summary: summarizeAlerts(all), alerts: all.filter(a => severity === null || a.severity === severity).slice(0, limit), generated_at: new Date().toISOString() });
       }
       const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish|stream|drainage-calibration))?$/i);
       if (match) {
         const [, id, action] = match;
         if (!action && req.method === 'GET') {
-          const record = await get(id), rawSample = url.searchParams.get('sample'), sample = rawSample === null ? null : Number(rawSample);
+          const rawRecord = await get(id), rawSample = url.searchParams.get('sample'), sample = rawSample === null ? null : Number(rawSample);
           if (sample !== null && (!Number.isInteger(sample) || sample < 0)) fail('sample must be a nonnegative integer');
-          await requireAccess(who, record.fixture_id);
+          await requireAccess(who, rawRecord.fixture_id);
+          const record=await withMonitoringCarry(store,rawRecord);
           const siblings = ['drainage','monitoring'].includes(record.record_type) ? await store.list({ fixture_id: record.fixture_id, data_source: record.data_source }, 5) : [];
-          const drain_status = drainStatuses(await statusContext(store, [...siblings.filter(r => r.record_id !== record.record_id), record])).get(record.record_id) ?? null;
+          const drain_status = drainStatuses(await statusFor([...siblings.filter(r => r.record_id !== record.record_id), record])).get(record.record_id) ?? null;
           const view=boundedRecordView(record,sample,url.searchParams.has('window')?Number(url.searchParams.get('window')):null,url.searchParams.get('after'));
           return json(200, {...view,computed:{...view.computed,drain_status}});
         }
@@ -188,6 +203,7 @@ export function createApp(config, store = createRecordStore(config), {
           const observation=observationId?await get(observationId):null;
           if(observation)await requireAccess(who,observation.fixture_id,true);
           const result=await mutate(id,previous=>({record:updateDrainageCalibration(previous,observation,input,captureId,clock())}));
+          invalidateDrainageProfile(store,result.record);
           return json(200,{record_id:id,calibration:result.record.calibration});
         }
         if (action === 'measurements' && req.method === 'POST') {
@@ -196,10 +212,10 @@ export function createApp(config, store = createRecordStore(config), {
           if (who.deviceId && current.data_source !== 'sensor') throw new ApiError(403, 'forbidden', 'Sensor keys cannot append simulation data');
           const points = validateMeasurements(await body(req));
           // A full monitoring recording continues in a new one; the acknowledgement keeps the board's own record_id.
-          const target = who.deviceId ? await appendTarget({ store, row: current, mutate, incoming: points.length }) : id;
-          let before = null;
-          const result = await mutate(target, previous => { before = previous; return appendMeasurements(previous, points); });
-          await saveNewDrainEvents(store, before, result.record);
+          const result = await appendRecordingBatch({store,row:current,mutate,points,allowRollover:Boolean(who.deviceId),clock});
+          const {target}=result;
+          if(result.record.record_type==='calibration'&&result.record.recording_status==='finished'&&!result.duplicate)invalidateDrainageProfile(store,result.record);
+          await refreshFleetHealth(store,result.record);
           if(who.deviceId&&req.headers['x-drain-live-capability']==='1')res.setHeader('X-Drain-Live-For-Ms',String(await liveMode.command(who.deviceId,req.headers['x-drain-live-active']==='1',result.record.measurements.at(-1)?.timestamp)));
           // Return a compact acknowledgement; full records are retrieved separately.
           return json(result.duplicate ? 200 : 201, { ...(target !== id ? { continued_in: target } : {}), duplicate: result.duplicate, record_id: id, recording_status: result.record.recording_status, measurement_count: result.record.measurements.length, result: result.record.result, calibration: result.record.calibration });
@@ -213,7 +229,8 @@ export function createApp(config, store = createRecordStore(config), {
             return { record: { ...previous, recording_status: 'finished', result } };
           });
           await saveNewDrainEvents(store, null, result.record);
-          return json(200, { record: result.record, computed: computedView(result.record) });
+          await refreshFleetHealth(store,result.record);
+          return json(200, { record: result.record, computed: computedView(await withMonitoringCarry(store,result.record)) });
         }
         if (action === 'stream' && req.method === 'GET') {
           await requireAccess(who, (await get(id)).fixture_id);
@@ -224,8 +241,8 @@ export function createApp(config, store = createRecordStore(config), {
           streams.add(stop); res.on('close', stop);
           const poll = async () => {
             try {
-              const record = await get(id);
-              const drain_status = ['drainage','monitoring'].includes(record.record_type) ? drainStatuses(await statusContext(store, [record])).get(id) : null;
+              const record = await withMonitoringCarry(store,await get(id));
+              const drain_status = ['drainage','monitoring'].includes(record.record_type) ? drainStatuses(await statusFor([record])).get(id) : null;
               const value = JSON.stringify({ record, computed: {...computedView(record), drain_status} });
               if (closed) return;
               if (res.writableLength > 65536) { stop(); return; }
