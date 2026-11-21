@@ -21,6 +21,10 @@ thresholds and lifetime health history are unchanged.
   does not falsely appear live. A stalled status request removes the confirmed
   indication after four seconds. Data arrival times and sensor freshness remain
   separate from this mode acknowledgment.
+- After the device confirms live mode, Live View warns when the newest reading
+  has stopped advancing for eight seconds. Older readings that keep arriving
+  are shown as catch-up when they are more than twelve seconds old. The last
+  reading stays visible, and a new reading clears the stall warning.
 - In normal monitoring, activation waits for the next upload (about five seconds
   at the nominal cadence). Live delivery sends each reading without waiting to
   fill a batch, and the app polls the bounded graph every 750 ms. Network and

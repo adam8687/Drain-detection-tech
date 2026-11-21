@@ -91,7 +91,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
         setRecords(previous => previous.map(record => record.record_id === recordId
           ? { ...record, recording_status: next.record.recording_status, result: next.record.result, measurement_count: next.computed.sample_count, calibration: next.record.calibration, drain_status: next.computed.drain_status,drain_cycles:next.computed.drain_cycles }
           : record));
-        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), live.active?LIVE_RECORD_POLL_MS:idle?15000:3000);}else {
+        if (next.record.recording_status === 'recording') {const depth=previousView.computed.water_levels?.at(-1)?.depth_mm;const idle=next.record.record_type==='monitoring'&&depth!=null&&depth<=8&&!next.computed.stale;timer = setTimeout(() => void load(), demo?LIVE_RECORD_POLL_MS:idle?15000:3000);}else {
           if(wasRecording&&next.record.continued_in){setRecordChoice(next.record.continued_in);}
           else setDemoState('off');
         }
@@ -109,7 +109,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
     }
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, recordId, fixture, source, refresh,live.active]);
+  }, [api, recordId, fixture, source, refresh, demo]);
 
   return { source, setSource: (value: DataSource) => { setRecordChoice(''); setSource(value); }, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
     records: fixtureRecords, recordId, setRecordId: (id: string) => { setDemoState('off'); setRecordChoice(id); },
