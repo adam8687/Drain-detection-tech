@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import{randomUUID}from'node:crypto';
 import {SQLiteRecordStore}from'../src/records-storage.js';import{SQLiteEmailStore}from'../src/email-storage.js';
+import {SupabaseEmailStore} from '../../supabase/functions/_shared/email-storage.js';
 import {emailCandidates,emailTimeLimit,createEmailNotifications,providerConfiguration}from'../../supabase/functions/_shared/email-notifications.js';
 const now=Date.now(),calibration={empty_distance_mm:300};
 const point=(elapsed,depth=50)=>({reading_id:randomUUID(),timestamp:new Date(now-130000+elapsed*1000).toISOString(),sensor:{distance_mm:300-depth,status:'ok'}});
@@ -65,4 +66,21 @@ test('compact timing references survive recording changes without re-reading old
  const {emailReferenceSamples}=await import('../../supabase/functions/_shared/email-notifications.js');const store=new SQLiteRecordStore(':memory:');t.after(()=>store.close());const mail=new SQLiteEmailStore(store.db);
  for(let i=0;i<10;i++){const started=now-1000000+i*30000,first=row({record_type:'drainage',created_at:new Date(started).toISOString(),measurements:[]});await store.insert(first);const finished={...first,recording_status:'finished',measurements:[{...point(0),timestamp:new Date(started).toISOString()}],result:{outcome:'completed',drainage_time_seconds:20}};await store.compareAndSet(first,finished,[],emailReferenceSamples(finished));}
  const refs=await mail.references('sink');assert.equal(refs.length,10);assert.equal(emailTimeLimit([],row(),refs).seconds,60);
+});
+
+
+test('saving an email preference accepts an empty PostgREST 201 response',async()=>{
+ const requests=[];
+ const deliveryStore=new SupabaseEmailStore('https://project.example.test','test-key',async(url,options)=>{
+  requests.push({url,options});
+  if(options.method==='POST')return new Response(null,{status:201});
+  return Response.json([{enabled:true,threshold_seconds:120}]);
+ });
+ const notifications=createEmailNotifications({config:{enabled:false},deliveryStore});
+ const saved=await notifications.savePreference('sink','owner',{enabled:true,threshold_seconds:120});
+ assert.equal(saved.enabled,true);
+ assert.equal(saved.threshold_seconds,120);
+ assert.equal(requests.length,2);
+ assert.equal(requests[0].options.headers.Prefer,'resolution=merge-duplicates,return=minimal');
+ assert.deepEqual(JSON.parse(requests[0].options.body),{fixture_id:'sink',user_id:'owner',enabled:true,threshold_seconds:120});
 });
