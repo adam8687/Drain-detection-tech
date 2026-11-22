@@ -1,4 +1,18 @@
 export type DataSource = 'sensor' | 'simulation';
+export interface EmergencyContact { id: string; name: string; email: string | null; email_enabled: boolean }
+export type EmergencyContactChange =
+  | { add_emergency_contact: { name: string; email: string; consent_confirmed: true } }
+  | { remove_emergency_contact: string }
+  | { set_emergency_contact_email: { id: string } & (
+      { enabled: false } | { enabled: true; consent_confirmed: true; email?: string }
+    ) };
+interface NotificationPreference {
+  enabled: boolean;
+  threshold_seconds: number | null;
+  provider_configured: boolean;
+  learning_threshold_seconds: number;
+  emergency_contacts: EmergencyContact[];
+}
 export interface LiveModeState {requested:boolean;active:boolean;capable:boolean;expires_at:string|null;remaining_ms:number;server_now:string}
 export type RecordType = 'calibration' | 'drainage' | 'monitoring';
 export interface DrainageCapture {capture_id:string;recording_id:string;from_reading_id:string;confirmed_at:string;tap_off_confirmed:true;clear_drain_confirmed:true}
@@ -69,9 +83,9 @@ export class DrainApi {
     if (filters.limit) query.set('limit', String(filters.limit));
     return this.request<AlertList>(`/alerts${query.size ? `?${query}` : ''}`, 'GET', undefined, signal);
   }
-  emailPreference(fixture:string,signal?:AbortSignal){return this.request<{enabled:boolean;threshold_seconds:number|null;provider_configured:boolean;learning_threshold_seconds:number;sms_enabled:boolean;sms_phone:string|null;sms_provider_configured:boolean}>(`/devices/${encodeURIComponent(fixture)}/notifications`,'GET',undefined,signal);}
-  saveEmailPreference(fixture:string,enabled:boolean,threshold_seconds:number|null){return this.request<{enabled:boolean;threshold_seconds:number|null;provider_configured:boolean;learning_threshold_seconds:number;sms_enabled:boolean;sms_phone:string|null;sms_provider_configured:boolean}>(`/devices/${encodeURIComponent(fixture)}/notifications`,'POST',{enabled,threshold_seconds});}
-  saveSmsPreference(fixture:string,enabled:boolean,threshold_seconds:number|null,sms_enabled:boolean,sms_phone:string|null){return this.request<Awaited<ReturnType<DrainApi['emailPreference']>>>(`/devices/${encodeURIComponent(fixture)}/notifications`,'POST',{enabled,threshold_seconds,sms_enabled,sms_phone});}
+  emailPreference(fixture:string,signal?:AbortSignal){return this.request<NotificationPreference>(`/devices/${encodeURIComponent(fixture)}/notifications`,'GET',undefined,signal);}
+  saveEmailPreference(fixture:string,enabled:boolean,threshold_seconds:number|null){return this.request<NotificationPreference>(`/devices/${encodeURIComponent(fixture)}/notifications`,'POST',{enabled,threshold_seconds});}
+  saveEmergencyContact(fixture:string,change:EmergencyContactChange){return this.request<NotificationPreference>(`/devices/${encodeURIComponent(fixture)}/notifications`,'POST',change);}
   calibrateDrainage(id:string,input:{action:'start';recording_id:string;confirm_tap_off:true;confirm_clear:true}|{action:'complete'|'cancel';capture_id:string}){return this.request<{record_id:string;calibration:Calibration}>(`/records/${encodeURIComponent(id)}/drainage-calibration`,'POST',input);}
   finish(id: string) { return this.request<RecordView>(`/records/${encodeURIComponent(id)}/finish`, 'POST'); }
 }

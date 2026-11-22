@@ -157,7 +157,12 @@ async function journey(profile,index){
     assert.doesNotMatch(await recordingCard.innerText(),/—|Measured drain time|Last completed drain/);
   });
   await check('owner can save email preferences while sender setup is pending',async()=>{const checkbox=page.getByLabel('Email me when drainage takes unusually long',{exact:true});await checkbox.check();await page.getByText('Email preference saved.',{exact:true}).waitFor();await page.getByText('Email delivery is being set up.',{exact:false}).waitFor();});
-  await check('owner can save SMS opt-in and number while provider setup is pending',async()=>{await page.getByLabel('Mobile number (with country code)',{exact:true}).fill('+15125550124');await page.getByLabel('Text me when drainage takes unusually long',{exact:true}).check();await page.getByRole('button',{name:'Save SMS settings',exact:true}).click();await page.getByText('SMS preference saved.',{exact:true}).waitFor();await page.reload();await page.getByLabel('Mobile number (with country code)',{exact:true}).waitFor();assert.equal(await page.getByLabel('Mobile number (with country code)',{exact:true}).inputValue(),'+15125550124');assert.equal(await page.getByLabel('Text me when drainage takes unusually long',{exact:true}).isChecked(),true);});
+  await check('owner email opt-in persists on reload',async()=>{
+    await page.reload();
+    const checkbox=page.getByLabel('Email me when drainage takes unusually long',{exact:true});
+    await checkbox.waitFor();
+    assert.equal(await checkbox.isChecked(),true);
+  });
   const updates = page.getByRole('region', { name: 'Reading updates' });
   const liveSwitch = updates.getByRole('switch', { name: 'Live updates' });
   await check('live view waits for device confirmation and displays the latest reading', async () => {
@@ -282,7 +287,7 @@ async function journey(profile,index){
   assert.equal(await page.getByRole('heading',{name:'Drain time not measured',exact:true}).count(),0);
   await layout('alerts');await page.getByRole('button',{name:'Acknowledge',exact:true}).first().click();await check('acknowledgment persists after reload',async()=>{await page.reload();await page.getByRole('checkbox',{name:'Show acknowledged'}).check();await page.getByRole('button',{name:'Mark unread',exact:true}).first().waitFor();});
   await page.getByRole('link',{name:'View recording →',exact:true}).first().click();await page.waitForURL('**/live-demo?**');
-  await page.getByRole('button',{name:'Save SMS settings',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'Email alerts',exact:true}).waitFor();
   await layout('alert-recording');
   await page.goto(`${origin}/add-unit?fixture=${fixture}`);await check('completed setup resumes without retraining',()=>page.getByRole('heading',{name:`${fixture} is ready`}).waitFor());
   await check('dashboard fetches compact fleet summaries without loading raw recordings',async()=>{
