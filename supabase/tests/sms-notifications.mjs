@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const db=new PGlite();
-await db.exec('create role anon;create role authenticated;create role service_role;');
+await db.exec('create role anon;create role authenticated;create role service_role bypassrls;');
 await db.exec(await readFile(root+'supabase/migrations/202610270001_drain_records.sql','utf8'));
 const id='00000000-0000-4000-8000-000000000001',active='00000000-0000-4000-8000-000000000002';
 const point={reading_id:id,timestamp:'2026-11-10T00:00:00Z',sensor_a:{distance_mm:300,status:'ok'},sensor_b:{distance_mm:null,status:'timeout'}};
@@ -26,6 +26,9 @@ await db.query('insert into auth.users values($1)',[owner]);
 await db.query(`insert into dm_devices values('sink',now(),'{"device_id":"sink"}')`);
 await db.query(`insert into dm_device_members(id,device_id,user_id,role,created_at,payload)values(gen_random_uuid(),'sink',$1,'owner',now(),'{}')`,[owner]);
 const emailMigration=await readFile(root+'supabase/migrations/202611120002_email_notifications.sql','utf8');await db.exec(emailMigration);await db.exec(emailMigration);
+const emailOnlyMigration=await readFile(root+'supabase/migrations/202611220002_email_only_alerts.sql','utf8');
+await db.exec(emailOnlyMigration);
+assert.deepEqual((await db.query('select * from claim_drain_emails(10)')).rows,[]);
 const migration=await readFile(root+'supabase/migrations/202611150001_sms_notifications.sql','utf8');
 await db.query('update drain_records set calibration=$1 where record_id=$2',[{empty_distance_mm:400},fresh]);
 await db.query(`insert into drain_email_preferences(fixture_id,user_id,enabled)values('sink',$1,true)`,[owner]);
@@ -51,4 +54,45 @@ await db.exec('set role anon');await assert.rejects(db.query('select * from clai
 // A viewer cannot enqueue, even with a retained preference from former ownership.
 await db.query("update dm_device_members set role='viewer'");await db.query('delete from drain_email_outbox');
 await db.query('select queue_drain_email_events($1,$2)',[fresh,[event]]);assert.equal((await db.query('select count(*) from drain_email_outbox')).rows[0].count,0);
-console.log('PASS: SMS migration is repeatable, protects destinations, separates channel cooldowns/claims, stops ambiguous sends, and rejects viewers/anonymous access.');await db.close();
+await db.query("update dm_device_members set role='owner'");
+const backup={id:active,name:'Legacy maintenance',phone:'+15125550126',sms_enabled:true};
+await db.query('update drain_email_preferences set enabled=false,emergency_contacts=$1',[[backup]]);
+await db.query('select queue_drain_email_events($1,$2)',[fresh,[event]]);
+assert.equal((await db.query("select count(*) from drain_email_outbox where channel='sms'")).rows[0].count,1);
+const addContact=async contact=>(await db.query(
+ 'select add_drain_emergency_contact($1,$2,$3) as added',['sink',owner,contact]
+)).rows[0].added;
+const readingsBeforeEmailOnly=(await db.query('select record_id,measurements,calibration,result from drain_records order by record_id')).rows;
+await db.exec(emailOnlyMigration);await db.exec(emailOnlyMigration);
+assert.deepEqual((await db.query('select record_id,measurements,calibration,result from drain_records order by record_id')).rows,readingsBeforeEmailOnly);
+assert.equal((await db.query("select count(*) from drain_email_outbox where channel='sms' and status<>'cancelled'")).rows[0].count,0);
+assert.deepEqual((await db.query('select emergency_contacts from drain_email_preferences')).rows[0].emergency_contacts,[backup]);
+
+const emailContact={id:active,email:'backup@example.test',email_enabled:true,subscription_id:fresh};
+const configureEmail=async contact=>(await db.query(
+ 'select set_drain_emergency_contact_email($1,$2,$3,$4) as saved',
+ ['sink',owner,contact.id,{email:contact.email,email_enabled:contact.email_enabled,subscription_id:contact.subscription_id}]
+)).rows[0].saved;
+const pending=async()=>(await db.query("select recipient,contact_id from drain_email_outbox where channel='email' and status='pending'")).rows;
+const emailEvent={...event,event_key:'email-only'};
+await db.query('select queue_drain_email_events($1,$2)',[fresh,[emailEvent]]);
+assert.deepEqual(await pending(),[]);
+await db.exec('set role service_role');
+assert.equal(await configureEmail(emailContact),true);
+assert.equal(await addContact({id,name:'Maintenance',email:'maintenance@example.test',email_enabled:true}),true);
+assert.equal(await configureEmail({...emailContact,email:'maintenance@example.test'}),false);
+await db.exec('reset role');
+await db.exec(await readFile(root+'supabase/migrations/202611150002_incremental_record_writes.sql','utf8'));
+const current=(await db.query('select * from drain_records where record_id=$1',[fresh])).rows[0];
+const comparison={calibration:current.calibration,result:current.result,recording_status:current.recording_status};
+const append={...comparison,append_measurements:[{reading_id:id,timestamp:point.timestamp,sensor:point.sensor_a}],notification_events:[emailEvent,emailEvent]};
+const upload=()=>db.query('select * from update_drain_record_incremental($1,$2,$3,$4)',[fresh,current.revision,comparison,append]);
+assert.equal((await upload()).rows.length,1);
+assert.deepEqual((await upload()).rows,[]);
+const jobs=await pending();
+assert.equal(jobs.length,2);
+assert.deepEqual(jobs.find(job=>job.recipient===emailContact.email),{recipient:emailContact.email,contact_id:fresh});
+assert.equal((await db.query('select * from claim_drain_notifications(10,$1)',[['sms']])).rows.length,0);
+assert.equal((await db.query('select * from claim_drain_emails(10)')).rows.length,2);
+console.log('PASS: Email-only migration preserves contacts and readings, cancels and blocks SMS, and queues only consenting email contacts.');
+await db.close();

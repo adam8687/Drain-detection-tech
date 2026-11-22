@@ -5,6 +5,8 @@ import {monitoringEvents,ordered,depths,SETTINGS} from './records-domain.js';
 // NIST's modified z-score (>3.5) informs the robust bound after 10 observations.
 // Floors, multipliers and the learning fallback are engineering policy, not codes.
 export const EMAIL_POLICY={version:'email-v1',learningSeconds:120,minimumSeconds:60,referenceCount:10,cooldownSeconds:3600};
+const MAX_EMERGENCY_CONTACTS=5;
+const contactIdPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const median=xs=>{const s=[...xs].sort((a,b)=>a-b);return(s[Math.floor((s.length-1)/2)]+s[Math.floor(s.length/2)])/2;};
 const firstWet=row=>ordered(row.measurements).find(p=>depths(p,row.calibration)?.[0]>=SETTINGS.wet);
 export function emailReferenceSamples(record){
@@ -35,61 +37,98 @@ export function emailCandidates(record,context=[record],now=Date.now(),reference
   return[{event_key:createHash('sha256').update(`${EMAIL_POLICY.version}:${record.fixture_id}:${record.record_id}:${event.record_id}`).digest('hex'),fixture_id:record.fixture_id,record_id:record.record_id,elapsed_seconds:elapsed,threshold_seconds:policy.seconds,reference_count:policy.reference_count,usual_seconds:policy.usual_seconds,observed_at:last.timestamp,completed,policy_version:EMAIL_POLICY.version}];
  });
 }
-const phonePattern=/^\+[1-9]\d{7,14}$/;
+function contactEmail(value){
+ if(typeof value!=='string')return null;
+ const email=value.trim().toLowerCase();
+ return email.length<=254&&/^[^\s@<>,;:]+@[^\s@<>,;:]+\.[^\s@<>,;:]+$/.test(email)?email:null;
+}
 export function providerConfiguration(env={}){
  const apiKey=env.RESEND_API_KEY||'',from=env.DRAIN_EMAIL_FROM||'',appUrl=env.DRAIN_APP_URL||'';
  let valid=false;try{valid=new URL(appUrl).protocol==='https:';}catch{}
  const emailEnabled=env.DRAIN_EMAIL_ENABLED==='true'&&Boolean(apiKey)&&valid&&/^([^<>\r\n]+ <)?[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>?$/.test(from);
- const sms={accountSid:env.TWILIO_ACCOUNT_SID||'',authToken:env.TWILIO_AUTH_TOKEN||'',from:env.TWILIO_FROM_NUMBER||'',messagingServiceSid:env.TWILIO_MESSAGING_SERVICE_SID||''};
- sms.enabled=env.DRAIN_SMS_ENABLED==='true'&&valid&&/^AC[0-9a-fA-F]{32}$/.test(sms.accountSid)&&Boolean(sms.authToken)&&(phonePattern.test(sms.from)||/^MG[0-9a-fA-F]{32}$/.test(sms.messagingServiceSid));
- return{apiKey,from,appUrl,emailEnabled,sms,enabled:emailEnabled||sms.enabled};
+ return{apiKey,from,appUrl,emailEnabled,enabled:emailEnabled};
 }
 export function createEmailNotifications({config,deliveryStore,accessStore,userEmail,fetcher=fetch,logger=()=>{}}){
- const emailEnabled=config.emailEnabled??config.enabled,smsEnabled=config.sms?.enabled??false;
- const channels=[...(emailEnabled?['email']:[]),...(smsEnabled?['sms']:[])];
+ const emailEnabled=config.emailEnabled??config.enabled??false;
  let flushing=null,lastKick=0;const references=new Map();
- const service={enabled:channels.length>0,deliveryStore,
+ const service={enabled:emailEnabled,deliveryStore,
   async references(fixture){const hit=references.get(fixture);if(hit&&hit.expires>Date.now())return hit.rows;const rows=await deliveryStore.references(fixture);references.set(fixture,{rows,expires:Date.now()+30000});while(references.size>128)references.delete(references.keys().next().value);return rows;},
-  async preference(fixture,user){const p=await deliveryStore.preference(fixture,user);return{enabled:p?.enabled??false,threshold_seconds:p?.threshold_seconds??null,provider_configured:emailEnabled,sms_enabled:p?.sms_enabled??false,sms_phone:p?.sms_phone??null,sms_provider_configured:smsEnabled,learning_threshold_seconds:EMAIL_POLICY.learningSeconds};},
+  async preference(fixture,user){
+   const p=await deliveryStore.preference(fixture,user);
+   return{enabled:p?.enabled??false,threshold_seconds:p?.threshold_seconds??null,provider_configured:emailEnabled,learning_threshold_seconds:EMAIL_POLICY.learningSeconds,
+    emergency_contacts:(p?.emergency_contacts??[]).map(({id,name,email=null,email_enabled})=>({id,name,email,email_enabled:email_enabled===true&&Boolean(email)}))};
+  },
   async savePreference(fixture,user,input){
-   if(!input||typeof input.enabled!=='boolean'||Object.keys(input).some(k=>!['enabled','threshold_seconds','sms_enabled','sms_phone'].includes(k)))throw Error('Choose whether to enable drainage alerts.');
+   if(input&&Object.keys(input).length===1){
+    if(Object.hasOwn(input,'add_emergency_contact')){
+     const contact=input.add_emergency_contact;
+     const name=typeof contact?.name==='string'?contact.name.trim():'';
+     const email=contactEmail(contact?.email);
+     if(!name||name.length>80||!email)throw Error('Enter a contact name and a valid email address.');
+     if(contact.consent_confirmed!==true)throw Error('Confirm that the contact agreed to receive drain alert emails.');
+     const saved=await deliveryStore.addEmergencyContact(fixture,user,{id:crypto.randomUUID(),name,email,email_enabled:true,consent_confirmed_at:new Date().toISOString()},MAX_EMERGENCY_CONTACTS);
+     if(!saved)throw Error('This email is already on the list or the unit has five emergency contacts.');
+     return service.preference(fixture,user);
+    }
+    if(Object.hasOwn(input,'remove_emergency_contact')){
+     const id=input.remove_emergency_contact;
+     if(typeof id!=='string'||!contactIdPattern.test(id))throw Error('Choose an emergency contact to remove.');
+     await deliveryStore.removeEmergencyContact(fixture,user,id);
+     return service.preference(fixture,user);
+    }
+    if(Object.hasOwn(input,'set_emergency_contact_email')){
+     const change=input.set_emergency_contact_email;
+     if(typeof change?.id!=='string'||!contactIdPattern.test(change.id)||typeof change.enabled!=='boolean')throw Error('Choose an emergency contact and whether to send emails.');
+     if(change.enabled&&change.consent_confirmed!==true)throw Error('Confirm that the contact agreed to receive drain alert emails.');
+     const patch={email_enabled:change.enabled,subscription_id:crypto.randomUUID()};
+     if(change.enabled){
+      patch.consent_confirmed_at=new Date().toISOString();
+      if(Object.hasOwn(change,'email')){
+       const email=contactEmail(change.email);
+       if(!email)throw Error('Enter a valid email address.');
+       patch.email=email;
+      }
+     }
+     const saved=await deliveryStore.setEmergencyContactEmail(fixture,user,change.id,patch);
+     if(!saved)throw Error('Choose a saved contact with a valid email address that is unique on this unit.');
+     return service.preference(fixture,user);
+    }
+   }
+   if(!input||typeof input.enabled!=='boolean'||Object.keys(input).some(k=>!['enabled','threshold_seconds'].includes(k)))throw Error('Choose whether to enable email alerts.');
    const threshold=input.threshold_seconds??null;if(threshold!==null&&(!Number.isInteger(threshold)||threshold<30||threshold>3600))throw Error('Choose a time limit from 30 to 3600 seconds.');
-   if(Object.hasOwn(input,'sms_enabled')&&typeof input.sms_enabled!=='boolean')throw Error('Choose whether to enable SMS alerts.');
-   const previous=await deliveryStore.preference(fixture,user);
-   const smsEnabled=input.sms_enabled??previous?.sms_enabled??false;
-   const phone=input.sms_phone===undefined?previous?.sms_phone??null:input.sms_phone;
-   if(typeof smsEnabled!=='boolean'||phone!==null&&(typeof phone!=='string'||!phonePattern.test(phone))||smsEnabled&&!phone)throw Error('Enter a phone number with country code, such as +15125550123, and choose whether to enable SMS.');
-   await deliveryStore.savePreference({fixture_id:fixture,user_id:user,enabled:input.enabled,threshold_seconds:threshold,sms_enabled:smsEnabled,sms_phone:phone});return service.preference(fixture,user);
+   await deliveryStore.savePreference({fixture_id:fixture,user_id:user,enabled:input.enabled,threshold_seconds:threshold});
+   return service.preference(fixture,user);
   },
   async flush(){
    if(!service.enabled)return{sent:0,failed:0};if(flushing)return flushing;
-   flushing=(async()=>{let sent=0,failed=0;await Promise.all((await deliveryStore.claim(2,channels)).map(async job=>{
-    const sms=job.channel==='sms';let attempted=false;
+   flushing=(async()=>{let sent=0,failed=0;const ownerEmails=new Map();await Promise.all((await deliveryStore.claim(MAX_EMERGENCY_CONTACTS+1)).map(async job=>{
     try{
      const membership=(await accessStore.list('device_members',{device_id:job.fixture_id,user_id:job.user_id},1))[0];
      const preference=await deliveryStore.preference(job.fixture_id,job.user_id);
-     const recipient=membership?.role!=='owner'?null:sms?(preference?.sms_enabled?preference.sms_phone:null):(preference?.enabled?await userEmail(job.user_id):null);
+     let recipient=null;
+     if(membership?.role==='owner'){
+      if(preference?.enabled&&!ownerEmails.has(job.user_id))ownerEmails.set(job.user_id,Promise.resolve().then(()=>userEmail(job.user_id)));
+      const ownerEmail=preference?.enabled?await ownerEmails.get(job.user_id):null;
+      if(job.contact_id)recipient=preference?.emergency_contacts?.find(contact=>contact.email_enabled===true&&(contact.subscription_id??contact.id)===job.contact_id)?.email;
+      else recipient=ownerEmail;
+      if(job.contact_id&&recipient&&recipient===contactEmail(ownerEmail))recipient=null;
+     }
      if(!recipient||job.recipient&&job.recipient!==recipient){await deliveryStore.finish(job,'cancelled');return;}
      const event=job.event;
      const link=`${config.appUrl.replace(/\/$/,'')}/live-demo?fixture=${encodeURIComponent(job.fixture_id)}&record=${encodeURIComponent(event.record_id)}&source=sensor`;
-     const text=`${event.completed?'Slow drainage was measured':'Water is still present'} at ${job.fixture_id}.\nObserved time: ${event.elapsed_seconds.toFixed(1)} seconds.\nAlert limit: ${event.email_threshold_seconds} seconds.\nCheck that the tap is off and the plug is open, then inspect the drain. This is not a confirmed blockage diagnosis.\n\nView your unit: ${link}`;
-     const payload=job.payload??(sms?{To:recipient,Body:`Drain Monitor: ${event.completed?'Slow drainage':'Water still present'} at ${job.fixture_id} (${Math.round(event.elapsed_seconds)}s). Check tap, plug and drain. ${link} Reply STOP to unsubscribe.`,...(config.sms.messagingServiceSid?{MessagingServiceSid:config.sms.messagingServiceSid}:{From:config.sms.from})}:{from:config.from,to:[recipient],subject:`Drainage needs attention: ${job.fixture_id}`,text});
+     const footer=job.contact_id?'Contact the unit owner to stop these alerts.':`View your unit: ${link}`;
+     const text=`${event.completed?'Slow drainage was measured':'Water is still present'} at ${job.fixture_id}.\nObserved time: ${event.elapsed_seconds.toFixed(1)} seconds.\nAlert limit: ${event.email_threshold_seconds} seconds.\nCheck that the tap is off and the plug is open, then inspect the drain. This is not a confirmed blockage diagnosis.\n\n${footer}`;
+     const payload=job.payload??{from:config.from,to:[recipient],subject:`Drainage needs attention: ${job.fixture_id}`,text};
      // Seal before sending so retries cannot change the destination or content.
      await deliveryStore.seal(job,recipient,payload);
-     attempted=true;
-     const response=sms?await fetcher(`https://api.twilio.com/2010-04-01/Accounts/${config.sms.accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${btoa(`${config.sms.accountSid}:${config.sms.authToken}`)}`,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(payload).toString(),signal:AbortSignal.timeout(10000)}):await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json','Idempotency-Key':`drain/${job.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
-     if(!response.ok){
-      if(sms){failed++;if(response.status===429)await deliveryStore.retry(job);else await deliveryStore.finish(job,'failed');logger('SMS provider rejected an alert; check notification delivery status.');return;}
-      throw Error('Email provider unavailable');
-     }
-     const result=await response.json(),id=sms?result.sid:result.id;if(typeof id!=='string')throw Error('Invalid provider acknowledgment');
+     const response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json','Idempotency-Key':`drain/${job.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(10000)});
+     if(!response.ok)throw Error('Email provider unavailable');
+     const {id}=await response.json();
+     if(typeof id!=='string')throw Error('Invalid provider acknowledgment');
      await deliveryStore.finish(job,'sent',id);sent++;
     }catch{failed++;
-     // Twilio Messages has no send idempotency key. Ambiguous requests must not
-     // be resent automatically: the original may already have been accepted.
-     if(sms&&attempted)await deliveryStore.finish(job,'failed').catch(()=>{});
-     else await deliveryStore.retry(job).catch(()=>{});
-     logger(sms?'SMS delivery could not be confirmed.':'Drainage email remains queued for retry.');
+     await deliveryStore.retry(job).catch(()=>{});
+     logger('Drainage email remains queued for retry.');
     }
    }));return{sent,failed};})().finally(()=>{flushing=null;});return flushing;
   },

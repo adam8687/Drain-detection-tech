@@ -32,6 +32,5 @@ created by `test:product`, with its mock identity settings):
 CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' node tests/notification-settings.mjs
 ```
 
-This checks email opt-in, SMS consent and phone persistence across reloads,
-independent SMS opt-out, and page width at 1440px and 320px. Provider calls remain
-disabled and no live customer data is used. Screenshots go to `/tmp/drain-sms-ui`.
+This checks owner email opt-in and opt-out, emergency contact add/pause/resume/remove and persistence, and page width at 1440px and 320px. Provider calls remain
+disabled and no live customer data is used. Screenshots go to `/tmp/drain-email-ui`.

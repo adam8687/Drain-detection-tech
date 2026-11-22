@@ -213,5 +213,10 @@
 .notificationForm { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .notificationChoice { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
 .notificationChoice input { flex-shrink: 0; margin-top: 4px; accent-color: var(--slate); }
-.notificationPhone { display: block; box-sizing: border-box; width: 100%; min-height: 44px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--color-input); font-size: 16px !important; }
+.notificationInput { display: block; box-sizing: border-box; width: 100%; min-height: 44px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--color-input); font-size: 16px !important; }
 .notificationForm button:disabled { opacity: .55; }
+.emergencyContactList { list-style: none; padding: 0; }
+.emergencyContactList li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.emergencyContactList li div { overflow-wrap: anywhere; }
+.emergencyContactActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.emergencyContactResume { flex-basis: 100%; }

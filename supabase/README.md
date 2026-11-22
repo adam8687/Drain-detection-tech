@@ -48,15 +48,15 @@ PGLITE_MODULE_PATH=/tmp/drain-sql-test/node_modules/@electric-sql/pglite/dist/in
 
 ## Authentication and email service setup
 
-Apply `migrations/202611120002_email_notifications.sql` after the single-sensor migration. The notification preference, compact timing-reference and email-outbox tables are private; customer access uses owner-authenticated API routes. Sensor measurements and queued email events commit in one transaction. This migration does not enable a sender or send email.
+Apply `migrations/202611120002_email_notifications.sql` after the single-sensor migration, then apply the [email-only update](#email-only-alerts). The notification preference, compact timing-reference and email-outbox tables are private; customer access uses owner-authenticated API routes. Sensor measurements and queued email events commit in one transaction. This migration does not enable a sender or send email.
 
 Use `npm run auth:setup` to review the production Auth settings for `https://drain-detection-tech.vercel.app`. With authorized project-management access in private operator configuration, `npm run auth:setup -- --apply` updates only the application URL, required redirects and email-confirmation settings, preserving other allowed redirect URLs. A database service key cannot change hosted Auth settings. The existing project already has email/password enabled and requires confirmation; local browser credentials were connected without exposing a server key. Vercel production environment variables and hosted redirect settings still need deployment/operator access.
 
 Supabase's default email server is for limited team testing, not customer registrations. When a sender domain is available, verify it with Resend, configure `DRAIN_EMAIL_FROM`, and put `RESEND_API_KEY` only in server settings. Configure Supabase Auth SMTP with `smtp.resend.com`, port `465`, username `resend`, and the Resend credential as password. `npm run auth:setup -- --apply --smtp` can configure this through the Management API once the private sender/credential settings exist. The same provider then supports confirmation/password reset through SMTP and drainage warnings through its API. See [Supabase SMTP](https://supabase.com/docs/guides/auth/auth-smtp) and [Resend's Supabase guide](https://resend.com/docs/send-with-supabase-smtp).
 
-Set `DRAIN_EMAIL_ENABLED=true` only after migration, sender verification and deployment. Customers sign in and enable **Email alerts** for their unit; no customer handles a credential. Messages go only to the current owner's verified account email, never to an arbitrary request-supplied address. Viewers, sensor credentials and the bench viewer cannot change notification preferences.
+Set `DRAIN_EMAIL_ENABLED=true` only after migration, sender verification and deployment. Customers sign in and enable **Email alerts** for their unit; no customer handles a credential. Owner alerts go to their verified account email. Owners can add consenting emergency contacts on a per-unit basis. Viewers, sensor credentials and the bench viewer cannot change notification preferences.
 
-Email evaluation runs during sensor ingestion, even when no browser is open. A worker sends queued messages using stable provider idempotency keys and immutable payloads. Jobs have atomic leases, five attempts, a 23-hour retry deadline, one event/owner message, and an hour cooldown per owner/unit. Revoked ownership, opt-out or email changes cancel delivery. Provider acceptance is recorded as sent; this is not an inbox-delivery guarantee. A sender/provider failure does not silently mark a job sent.
+Email evaluation runs during sensor ingestion, even when no browser is open. A worker sends queued messages using stable provider idempotency keys and immutable payloads. Jobs have atomic leases, five attempts, a 23-hour retry deadline, one message per event and recipient, and a one-hour cooldown per unit. Revoked ownership, opt-out or email changes cancel delivery. Provider acceptance is recorded as sent; this is not an inbox-delivery guarantee. A sender/provider failure does not silently mark a job sent.
 
 For retries after a worker shutdown or upload outage, configure the optional `operations/schedule-email-delivery.sql` job. It uses the purpose-scoped `DRAIN_EMAIL_WORKER_TOKEN` from Vault and calls the protected `/api/v1/internal/email-deliveries` endpoint only when jobs are due; it does not scan sensor histories or invoke the function for an empty queue. The worker credential cannot access recordings or account settings. `npm run email:retry` is an operator-only one-shot alternative. Sender configuration, Vault secrets and the retry schedule have not been activated on the hosted project.
 
@@ -68,60 +68,32 @@ After ten earlier comparable completed uses at a starting depth within 25%, emai
 
 Simulation, historical dual-sensor captures, stale readings, missing echoes and sampling gaps cannot generate a live standing-water email. The email asks the owner to check the tap, plug and drain; it does not assert that a clog has been diagnosed.
 
-## Owner email and Twilio SMS
+## Email-only alerts
 
-Apply `migrations/202611150001_sms_notifications.sql` after the existing email migration.
-The update preserves email settings, old outbox rows and all sensor data. Both Node
-and Edge use the same provider logic. Owners choose each channel independently in
-**Email and SMS alerts** on the live unit page. Email always targets the current
-owner's verified account address; owners enter their SMS number in international
-format and explicitly consent to automated alerts. Viewers and sensor keys cannot
-read or change the phone number. Disabling a channel or changing its recipient
-cancels queued messages at delivery time. Removing ownership prevents both channels.
+Apply `migrations/202611220002_email_only_alerts.sql` after the base email
+migration. It retires queued SMS jobs, preserves owner email settings and contact
+names, and supports upgrading existing databases or starting from the base email
+schema. Deploy the hosted backend and frontend together.
 
-Operator preparation, using the existing linked Supabase project and CLI login:
+In **Email alerts**, owners can turn alerts to their verified account address on
+or off. They can add up to five consenting emergency contacts per unit. Each
+contact can be paused, resumed with renewed consent, or removed independently.
+For a contact saved with a phone number only, use **Add email address** to enter
+their address and record consent before enabling email.
+
+Keep `DRAIN_APP_URL` set to the HTTPS frontend. Privately set
+`RESEND_API_KEY` and `DRAIN_EMAIL_FROM` with a sender on a verified Resend domain.
 
 ```bash
-npm run notifications:setup                 # shows readiness, no live changes
-npm run notifications:setup -- --apply      # additive schema, Edge deploy, Vault and retry schedule
+npm run notifications:setup                              # check settings without live changes
+npm run notifications:setup -- --apply                    # email schema, backend, and retry schedule
+npm run notifications:setup -- --apply --activate-email   # activate email delivery
 ```
 
-Before activation, privately fill `backend/.env` with `RESEND_API_KEY`,
-`DRAIN_EMAIL_FROM` (verified sender), `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-and either `TWILIO_FROM_NUMBER` (SMS-capable) or `TWILIO_MESSAGING_SERVICE_SID`
-(with an SMS sender). Keep `DRAIN_APP_URL` set to the HTTPS production frontend.
-Then run `npm run notifications:setup -- --apply --activate`. This copies only
-notification settings into the ignored private cloud file, sets function secrets,
-deploys the shared provider logic, and configures the existing purpose-scoped retry
-worker. The worker token is generated automatically and kept in private files and
-Supabase Vault. Do not put any provider credential in browser variables.
-The frontend changes must be deployed through the existing frontend hosting workflow.
+Use `--secrets-only` to refresh settings on a deployment that already has the
+email-only migration and backend. See [Resend's email API](https://resend.com/docs/api-reference/emails/send-email).
 
-To activate a single configured channel, use `--activate-sms` or `--activate-email`
-instead of `--activate`. For an already-prepared hosted deployment, add
-`--secrets-only` to update provider settings and verify the worker without
-reapplying schema changes or redeploying other local work. For example:
-`npm run notifications:setup -- --apply --activate-sms --secrets-only`.
-
-The sender must be ready in the provider accounts: a verified Resend domain/sender,
-an SMS-capable Twilio sender, and any sender registration required by Twilio for
-its destination. Trial accounts can restrict recipients. Twilio's Messaging Service
-must have opt-out/help handling configured; STOP remains enforced by Twilio. Never
-bypass a provider opt-out by automatically changing the sender.
-See [Twilio Messages](https://www.twilio.com/docs/messaging/api/message-resource)
-and [Resend sending](https://resend.com/docs/api-reference/emails/send-email).
-
-Each channel shares the sink's drainage threshold but gets its own event deduplication
-and one-hour cooldown. A provider acknowledgment records acceptance, not confirmed
-handset/inbox delivery. Email retries retain an immutable body and Resend idempotency
-key. Twilio rate limits retry with backoff; rejected or ambiguous SMS sends are marked
-failed rather than resent, since the Messages API provides no send idempotency key.
-An expired in-progress SMS lease is also marked failed to avoid duplicate texts after
-a worker crash. This can lose an alert if the crash happened before the send. Expired
-jobs are discarded after 23 hours. Delivery status is held in the private outbox;
-provider delivery callbacks and an owner delivery-history UI are not implemented.
-
-Validation: `npm run check`; the browser product journey includes SMS opt-in/reload.
+The worker skips jobs for removed or paused contacts and reuses a stable
+idempotency key for retries. Run `npm run check` for the local backend tests and
 `PGLITE_MODULE_PATH=/path/to/@electric-sql/pglite/dist/index.js node supabase/tests/sms-notifications.mjs`
-checks PostgreSQL migration preservation, repeatability, channel claims, cooldowns,
-phone constraints and access restrictions.
+to verify the PostgreSQL upgrade from the previous SMS configuration.

@@ -36,7 +36,7 @@ available under the existing access controls.
 Apply `supabase/migrations/202611150002_incremental_record_writes.sql` after
 the existing single-sensor migration, then deploy the backend/Edge Function.
 The migration is repeatable and does not rewrite existing rows. It delegates to
-the installed compact mutation, including its email/SMS hooks when configured.
+the installed compact mutation, including its email hooks when configured.
 Application-first deployment is compatible: a missing RPC uses the old path.
 No firmware update is required for these changes. A local build or test does not
 apply SQL or deploy to hosted Supabase.

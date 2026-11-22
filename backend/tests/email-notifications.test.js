@@ -43,7 +43,20 @@ test('notification preferences require the signed-in owner in both Node and host
   await accessStore.insert('device_members',{id:randomUUID(),device_id:'sink',user_id:'viewer-id',role:'viewer',created_at:new Date().toISOString()});
   const path='/api/v1/devices/sink/notifications';assert.equal((await invoke(path,'owner')).status,200);assert.equal((await invoke(path,'viewer')).status,403);assert.equal((await invoke(path,admin)).status,403);
   assert.equal((await invoke(path,'owner',{enabled:true,threshold_seconds:null})).status,200);assert.equal((await invoke(path,'owner',{enabled:true,recipient:'outsider@example.test'})).status,422);assert.equal((await invoke(path,'owner',{enabled:true,threshold_seconds:0})).status,422);
-  assert.equal((await invoke(path,'viewer',{enabled:true,sms_enabled:true,sms_phone:'+15125550124'})).status,403);assert.equal((await invoke(path,'owner',{enabled:true,sms_enabled:true,sms_phone:'+15125550124'})).status,200);
+  assert.equal((await invoke(path,'owner',{enabled:true,sms_enabled:true,sms_phone:'+15125550124'})).status,422);
+  const contact={name:'On-call maintenance',email:'maintenance@example.test',consent_confirmed:true};
+  assert.equal((await invoke(path,'viewer',{add_emergency_contact:contact})).status,403);
+  assert.equal((await invoke(path,'owner',{add_emergency_contact:{...contact,consent_confirmed:false}})).status,422);
+  const added=await invoke(path,'owner',{add_emergency_contact:contact});
+  assert.equal(added.status,200);
+  const [savedContact]=(await added.json()).emergency_contacts;
+  assert.deepEqual(savedContact,{id:savedContact.id,name:contact.name,email:contact.email,email_enabled:true});
+  const pause={set_emergency_contact_email:{id:savedContact.id,enabled:false}};
+  assert.equal((await invoke(path,'viewer',pause)).status,403);
+  assert.equal((await (await invoke(path,'owner',pause)).json()).emergency_contacts[0].email_enabled,false);
+  assert.equal((await invoke(path,'owner',{set_emergency_contact_email:{id:savedContact.id,enabled:true}})).status,422);
+  assert.equal((await invoke(path,'viewer',{remove_emergency_contact:savedContact.id})).status,403);
+  assert.deepEqual((await (await invoke(path,'owner',{remove_emergency_contact:savedContact.id})).json()).emergency_contacts,[]);
   const value=await(await invoke(path,'owner')).json();assert.equal(value.enabled,true);assert.equal(value.provider_configured,false);assert.equal((await invoke('/api/v1/internal/email-deliveries','owner',{})).status,403);assert.equal((await invoke('/api/v1/internal/email-deliveries','w'.repeat(32),{})).status,200);assert.equal((await invoke('/api/v1/records','w'.repeat(32))).status,403);
  }
 });
