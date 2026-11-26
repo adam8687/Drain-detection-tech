@@ -148,7 +148,7 @@ export default function AddUnitFlow() {
         {unit&&step!=='add'&&<div className={styles.actions}><a href={`/add-unit?fixture=${encodeURIComponent(unit)}`}>Save this setup link</a></div>}
         </>}
       </section>
-      <aside className={styles.art} aria-hidden="true"><div className={styles.artCanvas}><DesignAsset file="71e2d.svg" className={styles.sinkScene}/><div className={styles.phoneArt}><DesignAsset file="26625.svg"/></div><span className={`${styles.callout} ${styles.calloutUnit}`}>{unit||'DR-4851'} is printed on the sensor</span><span className={`${styles.callout} ${styles.calloutPhone}`}>{step==='drain'?'Learn this sink’s normal drainage':step==='teach'?'Record the empty sink':'Connect, then calibrate'}</span></div></aside>
+      <aside className={styles.art} aria-hidden="true"><div className={styles.artCanvas}><picture><source media="(prefers-reduced-motion: reduce)" srcSet="/images/design/71e2d.svg"/><DesignAsset file="71e2d-animated.svg" className={styles.sinkScene}/></picture><div className={styles.phoneArt}><DesignAsset file="26625.svg"/></div><span className={`${styles.callout} ${styles.calloutUnit}`}>{unit||'DR-4851'} is printed on the sensor</span><span className={`${styles.callout} ${styles.calloutPhone}`}>{step==='drain'?'Learn this sink’s normal drainage':step==='teach'?'Record the empty sink':'Connect, then calibrate'}</span></div></aside>
     </main>
   </>;
 }
