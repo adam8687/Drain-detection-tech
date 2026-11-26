@@ -14,6 +14,8 @@ on `utexas`.
 
 ## Existing installation and deployment
 
+For dashboard unit deletion, apply `migrations/20261126193040_delete_unit.sql` after the existing migrations, then deploy the updated `drain-api` Edge Function and frontend. Deletion revokes the unit’s access keys and erases its stored data. If you register the same hardware again, provision a new sensor key before it can upload.
+
 Apply `migrations/202611120001_single_sensor.sql` before deploying this version. Keep drain_records, dm_devices,
 dm_device_members and dm_device_keys. Calibration, drainage, forecast and alert
 modules now live in functions/_shared; existing Node modules re-export those

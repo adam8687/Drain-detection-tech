@@ -16,7 +16,7 @@ test('water check needs empty calibration and fresh sensor evidence, not a guess
  const ready=setupGuidance(record([point('first',40,-500),point('ready',40)]),now);
  assert.equal(ready.phase,'water_ready');assert.match(ready.message,/Turn the tap off/);assert.equal(ready.water_depth_mm,40);
 });
-test('setup requires three fresh, distinct and steady readings without changing connection status', () => {
+test('setup requires three distinct and steady readings from a fresh batch without changing connection status', () => {
  const newest=Date.now()-500;
  const sample=(id,depth,ms,failed=false)=>({...point(id,depth,0,failed),timestamp:new Date(newest+ms).toISOString()});
  const a=sample('A',0,-1000), b=sample('B',2,-500), c=sample('C',4,0);
@@ -25,9 +25,10 @@ test('setup requires three fresh, distinct and steady readings without changing 
  assert.equal(computedView(record([a,b,sample('C',20,0)])).setup_signal,'unstable');
  assert.equal(computedView(record([a,sample('B',0,-500,true),c])).setup_signal,'unstable');
  assert.equal(computedView(record([a,b,c])).setup_signal,'steady');
- const delayed=computedView(record([sample('old',0,-6000)]));
- assert.equal(delayed.setup_signal,'stale');
- assert.equal(delayed.sensor_connection,'connected');
+ const batch = [-7000, -6500, -6000].map((offset, i) => sample(String(i), 0, offset));
+ assert.equal(computedView(record(batch)).setup_signal,'steady');
+ assert.equal(computedView(record([sample('old',0,-6000)])).setup_signal,'checking');
+ assert.equal(computedView(record([sample('old',0,-13000)])).setup_signal,'stale');
 });
 test('running water cannot substitute for the empty-basin reference',()=>{
  const filling=Array.from({length:20},(_,i)=>point(String(i),i*3,-10000+i*500));

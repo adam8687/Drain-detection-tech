@@ -61,7 +61,8 @@ export default function AddUnitFlow() {
   const [resumeFixture,setResumeFixture]=useState(''),[restoring,setRestoring]=useState(false),[restoreFailed,setRestoreFailed]=useState(false),[retry,setRetry]=useState(0);
   const recording=useRecording(api,recordId);
   const signal = recording.view?.computed.setup_signal ?? recording.view?.computed.sensor_connection;
-  const connected = !recording.error && (signal === 'steady' || signal === 'connected');
+  const connected = recording.view?.record.recording_status === 'recording' && !recording.error && (signal === 'steady' || signal === 'connected');
+  const connectionEnded = recording.view?.record.recording_status === 'finished';
   const connection = connectionFeedback(recording.view, Boolean(recording.error));
   const authBlocked=Boolean(supabase)&&!session;
   const ready=reference?.drainage?.status==='ready';
@@ -101,6 +102,12 @@ export default function AddUnitFlow() {
     window.history.replaceState(null,'',`/add-unit?fixture=${encodeURIComponent(unit)}`);
     setStep('connect');
   },'Could not add the unit.');}
+  async function startConnection() {
+    if (recordId && !connectionEnded) await api.finish(recordId);
+    setRecordId(null);
+    const next = await api.start(unit, 'sensor', 'monitoring');
+    setRecordId(next.record_id);
+  }
   async function finishConnection(){if(recordId)await api.finish(recordId);setRecordId(null);setStep('teach');}
   return <>
     <ProductHeader active="add"/>
@@ -120,15 +127,15 @@ export default function AddUnitFlow() {
           <div className={styles.actions}>{existing?<button type="button" className={shell.primary} disabled={busy} onClick={()=>{setResumeFixture(unit);setRetry(n=>n+1);}}>Continue setup</button>:<button className={shell.primary} disabled={busy}>{busy?'Adding…':'Add and continue'}</button>}<a href="/dashboard" className={styles.cancel}>Cancel</a></div>
         </form>}
         {step==='connect'&&!restoring&&!restoreFailed&&<div className={styles.form}>
-          <div><h1 id="setup-title" tabIndex={-1}>Connect {unit}</h1><p className={styles.lead}>Leave the unit powered on. We will check its connection, then record the empty sink.</p></div>
-          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={()=>void run(async()=>{setRecordId((await api.start(unit,'sensor','monitoring')).record_id);},'Could not check the connection.')}>Start connection test</button>:<div className={`${styles.live} ${connected?styles.ok:''}`} role="status"><strong>{connection.title}</strong><span>{connection.hint}</span></div>}
-          <div className={styles.actions}><button className={shell.primary} disabled={!live.active||!connected||busy||!recordId||Boolean(recording.error)} onClick={()=>void run(finishConnection,'Could not finish the connection check.')}>Continue</button><button className={styles.cancel} disabled={busy} onClick={()=>void run(async()=>{if(recordId)await api.finish(recordId);setRecordId(null);setStep('done');},'Could not save setup.')}>Finish later</button></div>
+          <div><h1 id="setup-title" tabIndex={-1}>Connect {unit}</h1><p className={styles.lead}>Keep the unit powered on and connected to its configured network. USB units also need the installer’s bridge running. We’ll check for steady readings before recording the empty sink.</p></div>
+          {(!recordId||connectionEnded)?<button className={`${shell.primary} ${styles.big}`} disabled={busy} onClick={()=>void run(startConnection,'Could not check the connection.')}>{connectionEnded?'Restart connection test':'Start connection test'}</button>:<div className={`${styles.live} ${connected?styles.ok:''}`} role="status"><strong>{connection.title}</strong><span>{connection.hint}</span>{!connected&&<button className={shell.secondary} disabled={busy} onClick={()=>void run(startConnection,'Could not restart the connection test.')}>Restart connection test</button>}</div>}
+          <div className={styles.actions}><button className={shell.primary} disabled={!connected||busy||!recordId||Boolean(recording.error)} onClick={()=>void run(finishConnection,'Could not finish the connection check.')}>Continue</button><button className={styles.cancel} disabled={busy} onClick={()=>void run(async()=>{if(recordId)await api.finish(recordId);setRecordId(null);setStep('done');},'Could not save setup.')}>Finish later</button></div>
         </div>}
         {step==='teach'&&!restoring&&!restoreFailed&&<div className={styles.form}>
           <div><h1 id="setup-title" tabIndex={-1}>Record the empty sink</h1><p className={styles.lead}>That is the baseline: the distance from the sensor to the sink with no water in it.</p></div>
           <div className={styles.enrollment} role="status" aria-live="polite"><div className={styles.scanRing} style={{'--progress':`${(recording.view?.computed.calibration_progress??0)*100}%`}as CSSProperties}><span>{Math.round((recording.view?.computed.calibration_progress??0)*100)}%</span></div><strong>{recordId?'Keep the sink empty and still':'One quick empty-sink check'}</strong><p>Usually 8–10 seconds once the sensor is connected. Next, two guided drainage checks will measure this sink’s normal speed.</p></div>
           <label className={styles.check}><input type="checkbox" checked={empty} disabled={Boolean(recordId)} onChange={e=>setEmpty(e.target.checked)}/>The sink is empty, the tap is off and the sensor is fixed in place.</label>
-          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={!live.active||!empty||busy} onClick={()=>void run(async()=>setRecordId((await api.start(unit,'sensor','calibration',true)).record_id),'Could not record the empty sink.')}>Record empty sink</button>:<><progress max={1} value={recording.view?.computed.calibration_progress??0} aria-label="Empty baseline progress"/><p className={styles.note}>{recording.view?.computed.calibration_message??'Waiting for the sensor readings.'}</p><button className={shell.secondary} disabled={busy} onClick={()=>void run(async()=>{await api.finish(recordId);setRecordId(null);},'Could not stop the empty-sink check.')}>Stop and try again</button></>}
+          {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={!empty||busy} onClick={()=>void run(async()=>setRecordId((await api.start(unit,'sensor','calibration',true)).record_id),'Could not record the empty sink.')}>Record empty sink</button>:<><progress max={1} value={recording.view?.computed.calibration_progress??0} aria-label="Empty baseline progress"/><p className={styles.note}>{recording.view?.computed.calibration_message??'Waiting for the sensor readings.'}</p><button className={shell.secondary} disabled={busy} onClick={()=>void run(async()=>{await api.finish(recordId);setRecordId(null);},'Could not stop the empty-sink check.')}>Stop and try again</button></>}
         </div>}
         {step==='drain'&&!restoring&&!restoreFailed&&reference&&calibrationId&&<DrainageSetup api={api} fixture={unit} liveReady={live.active} calibrationId={calibrationId} calibration={reference} initialObservationId={initialObservationId} onSaved={value=>{setReference(value);if(value.drainage?.status==='ready')setStep('done');}}/>}
         {step==='done'&&!restoring&&!restoreFailed&&<div className={styles.form}>

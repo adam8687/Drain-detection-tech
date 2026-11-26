@@ -59,7 +59,8 @@ export class DrainApi {
     return value;
   }
   register(device_id: string, name: string) { return this.request<{device_id: string}>('/devices', 'POST', {device_id, name}); }
-  devices(signal?: AbortSignal) { return this.request<{ devices: { device_id: string; name: string }[] }>('/devices', 'GET', undefined, signal); }
+  deleteUnit(device_id: string) { return this.request<{deleted: string}>(`/devices/${encodeURIComponent(device_id)}`, 'DELETE'); }
+  devices(signal?: AbortSignal) { return this.request<{ devices: { device_id: string; name: string; can_delete?: boolean }[] }>('/devices', 'GET', undefined, signal); }
   fleet(source: DataSource, after: string, search = '', signal?: AbortSignal) {
     const query = new URLSearchParams({data_source:source});
     if(after)query.set('after',after);

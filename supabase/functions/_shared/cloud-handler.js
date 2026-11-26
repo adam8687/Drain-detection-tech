@@ -97,7 +97,7 @@ export function createCloudHandler(config, {
     const origin = request.headers.get('origin');
     const allowed = !origin || (config.origins || []).includes(origin);
     const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-      ...(origin && allowed ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'authorization,apikey,content-type,x-client-info' } : {}) };
+      ...(origin && allowed ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'authorization,apikey,content-type,x-client-info' } : {}) };
     const json = (status, body) => new Response(JSON.stringify(body), { status, headers });
     if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers });
     try {
@@ -144,10 +144,14 @@ export function createCloudHandler(config, {
       if (path === '/api/v1/devices') {
         if (who.deviceId) throw new ApiError(403, 'forbidden', 'Sensor keys cannot access the registry');
         if (request.method === 'GET') {
-          if (who.admin) return json(200, { devices: await accessStore.list('devices') });
+          if (who.admin) return json(200, { devices: (await accessStore.list('devices')).map(device => ({ ...device, can_delete: true })) });
           if (who.viewerFixture) { const value = await accessStore.get('devices', who.viewerFixture); return json(200,{devices:value ? [value] : []}); }
           const members = await accessStore.list('device_members', { user_id: who.userId }, 100);
-          return json(200, { devices: (await Promise.all(members.map(m => accessStore.get('devices', m.device_id)))).filter(Boolean) });
+          const devices = await Promise.all(members.map(async member => {
+            const device = await accessStore.get('devices', member.device_id);
+            return device && { ...device, can_delete: member.role === 'owner' };
+          }));
+          return json(200, { devices: devices.filter(Boolean) });
         }
         if (request.method === 'POST') {
           if (who.viewerFixture) throw new ApiError(403, 'forbidden', 'Viewer token is read-only');
@@ -165,6 +169,18 @@ export function createCloudHandler(config, {
         const key = viewer ? newDeviceKey().replace(/^dk_/, 'dv_') : newDeviceKey();
         await accessStore.insert('device_keys', { key_hash: hashDeviceKey(key), device_id: fixture, created_at: new Date().toISOString(), ...(viewer ? { kind: 'viewer' } : {}), created_by: who.userId || 'admin' });
         return json(201, { device_id: fixture, key });
+      }
+      const unit = path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)$/);
+      if (unit && request.method === 'DELETE') {
+        if (who.viewerFixture || who.deviceId) throw new ApiError(403, 'forbidden', 'Sign in as the unit owner');
+        const fixture = deviceId(unit[1]);
+        await access(who, fixture, true);
+        const [result] = await store.request('rpc/delete_drain_unit', {
+          method: 'POST',
+          body: JSON.stringify({ p_device: fixture, p_owner: who.userId ?? null }),
+        });
+        if (!result?.deleted) throw new ApiError(404, 'fixture_not_found', 'Unit not found');
+        return json(200, { deleted: fixture });
       }
       if (path === '/api/v1/records' && request.method === 'POST') {
         const input = validateRecordInput(await readBody(request)); await access(who, input.fixture_id, true);

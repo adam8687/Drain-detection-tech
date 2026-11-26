@@ -86,7 +86,7 @@ export function useFleet(search = '') {
   const current = result?.queryKey===queryKey ? result : null;
   const fixtures=useMemo(()=>describeFixtures(current?.units??[]),[current]);
   return {
-    fixtures, alertCount:current?.units.reduce((sum,unit)=>sum+unit.alert_count,0)??0,
+    api, fixtures, alertCount:current?.units.reduce((sum,unit)=>sum+unit.alert_count,0)??0,
     source,setSource,error,needsAuth,loading,refresh:()=>setRevision(n=>n+1),
     hasPrevious:cursors.length>0,hasNext:Boolean(current?.next),
     previousPage:()=>setPage({key:pageKey,cursors:cursors.slice(0,-1)}),

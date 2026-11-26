@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-async function forward(request: Request, context: { params: Promise<{ path: string[] }> }, method: 'GET' | 'POST') {
+async function forward(request: Request, context: { params: Promise<{ path: string[] }> }, method: 'GET' | 'POST' | 'DELETE') {
   const route = (await context.params).path.join('/');
   const list = route === 'api/v1/records';
   const devices = route === 'api/v1/devices';
@@ -10,9 +10,10 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   const keyCreation = /^api\/v1\/devices\/[a-zA-Z0-9_-]+\/keys$/.test(route);
   const notifications=/^api\/v1\/devices\/[a-zA-Z0-9_-]+\/notifications$/.test(route);
   const liveMode=/^api\/v1\/devices\/[a-zA-Z0-9_-]+\/live-mode$/.test(route);
+  const unit = /^api\/v1\/devices\/[a-zA-Z0-9_-]+$/.test(route);
   const detail = /^api\/v1\/records\/[0-9a-f-]+$/i.test(route);
   const mutation = /^api\/v1\/records\/[0-9a-f-]+\/(measurements|finish|drainage-calibration)$/i.test(route);
-  if (!(method === 'GET' ? list || detail || devices || alerts || summaries || sensorActive || notifications || liveMode : list || mutation || devices || keyCreation || notifications || liveMode)) return Response.json({ error: { code: 'not_found', message: 'Unsupported record route' } }, { status: 404 });
+  if (!(method === 'DELETE' ? unit : method === 'GET' ? list || detail || devices || alerts || summaries || sensorActive || notifications || liveMode : list || mutation || devices || keyCreation || notifications || liveMode)) return Response.json({ error: { code: 'not_found', message: 'Unsupported record route' } }, { status: 404 });
   let bytes: Uint8Array | undefined;
   if (method === 'POST' && !route.endsWith('/finish')) {
     if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return Response.json({ error: { message: 'Send Content-Type: application/json' } }, { status: 415 });
@@ -38,3 +39,4 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
 }
 export const GET = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'GET');
 export const POST = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'POST');
+export const DELETE = (request: Request, context: { params: Promise<{ path: string[] }> }) => forward(request, context, 'DELETE');

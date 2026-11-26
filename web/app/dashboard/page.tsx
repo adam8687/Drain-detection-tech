@@ -5,6 +5,7 @@ import OceanWaves from '../../components/ocean-waves';
 import DesignAsset from '../../components/design-asset';
 import AccountPanel from '../../components/account-panel';
 import RecordingWorkbench from '../../components/recording-workbench';
+import DeleteUnit from '../../components/delete-unit';
 import {useFleet} from '../../lib/use-fleet';
 import type {FleetCategory,FixtureCard} from '../../lib/use-fleet';
 import {FleetFilters,FleetPagination,FixtureTile,fixtureHref} from '../../components/fleet-parts';
@@ -26,6 +27,7 @@ export default function DashboardPage(){
   {baseline.length>0&&<section className={styles.section}><h2>Needs baseline <small>{baseline.length}</small></h2><div className={styles.cardGrid}>{baseline.map(f=><FixtureTile key={f.id} fixture={f} source={data.source}/>)}</div></section>}
   {good.length>0&&<section className={styles.section}><h2>Looks good <small>{good.length}</small></h2><div className={styles.goodGrid}>{good.map(f=><FixtureTile key={f.id} fixture={f} source={data.source} compact/>)}</div></section>}
   <FleetPagination {...data}/>
+  {!data.needsAuth && <DeleteUnit api={data.api} onDeleted={data.refresh}/>}
   <section className={styles.recordingTools}><button className={styles.secondary} aria-expanded={workbench} onClick={()=>setWorkbench(v=>!v)}>Installer tools</button>{workbench&&<RecordingWorkbench/>}</section>
  </main></>;
 }

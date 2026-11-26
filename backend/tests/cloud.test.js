@@ -68,6 +68,45 @@ test('cloud retains ownership, viewer roles, sensor-only appends and fixture sco
   const stored=await accessStore.get('device_keys',hashDeviceKey(viewer));
   assert.equal(stored.kind,'viewer');
 });
+test('unit deletion authorizes only the owner or administrator and scopes the database operation', async t => {
+  const { call, store, accessStore } = setup(t);
+  const path = '/api/v1/devices/delete-me';
+  await call('/api/v1/devices', 'alice', { device_id: 'delete-me', name: 'Test unit' });
+  await call('/api/v1/devices', 'bob', { device_id: 'keep-me', name: 'Other unit' });
+  const sensor = (await call(path + '/keys', 'alice', {})).body.key;
+  const viewer = (await call(path + '/view-key', 'alice', {})).body.key;
+  const remove = token => call(path, token, undefined, 'DELETE');
+  let expectedOwner = 'alice-id';
+  store.request = async (route, options) => {
+    assert.equal(route, 'rpc/delete_drain_unit');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), { p_device: 'delete-me', p_owner: expectedOwner });
+    return [{ deleted: true }];
+  };
+  assert.equal((await remove('')).status, 401);
+  assert.equal((await remove('bob')).status, 404);
+  await accessStore.insert('device_members', { id: randomUUID(), device_id: 'delete-me', user_id: 'bob-id', role: 'viewer', created_at: new Date().toISOString() });
+  for (const token of ['bob', sensor, viewer]) assert.equal((await remove(token)).status, 403);
+  assert.equal((await call('/api/v1/devices', 'bob')).body.devices.find(unit => unit.device_id === 'delete-me').can_delete, false);
+  assert.deepEqual(await remove('alice'), { status: 200, body: { deleted: 'delete-me' } });
+  expectedOwner = null;
+  assert.equal((await remove(ADMIN)).status, 200);
+});
+test('setup stays connected between normal uploads through the bounded production record endpoint', async t => {
+  const { call, point } = setup(t);
+  const fixture = 'batch-sink';
+  await call('/api/v1/devices', 'alice', { device_id: fixture, name: 'Batch sink' });
+  const key = (await call(`/api/v1/devices/${fixture}/keys`, 'alice', {})).body.key;
+  const row = (await call('/api/v1/records', 'alice', { fixture_id: fixture, record_type: 'monitoring', data_source: 'sensor' })).body;
+  const path = `/api/v1/records/${row.record_id}`;
+  assert.equal((await call(path + '?window=1', 'alice')).body.computed.setup_signal, 'waiting');
+  const start = Date.now() - 11000;
+  const measurements = Array.from({ length: 10 }, (_, index) => point(start + index * 500));
+  assert.equal((await call(path + '/measurements', key, { measurements })).status, 201);
+  const view = (await call(path + '?window=1', 'alice')).body;
+  assert.equal(view.record.measurements.length, 1);
+  assert.equal(view.computed.setup_signal, 'steady');
+});
 test('cloud calibrates, computes drainage and replay identically, and freezes completed results',async t=>{
   const {call,start,point,store}=setup(t);
   const base=Date.now()-60000;

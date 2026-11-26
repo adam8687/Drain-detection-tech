@@ -379,9 +379,10 @@ function setupSignal(orderedPoints, now) {
   const readings = orderedPoints.slice(-3);
   const latest = readings.at(-1);
   if (!latest) return 'waiting';
-  if (!setupReadingIsFresh(latest, now)) return 'stale';
+  const latestTime = Date.parse(latest.timestamp);
+  if (latestTime > now || now - latestTime > SETTINGS.fresh) return 'stale';
   if (latest.sensor.status !== 'ok') return 'unstable';
-  if (readings.length < 3 || readings.some(point => !setupReadingIsFresh(point, now)) ||
+  if (readings.length < 3 || readings.some(point => latestTime - Date.parse(point.timestamp) > SETUP_READING_MAX_AGE_MS) ||
       new Set(readings.map(point => Date.parse(point.timestamp))).size < 3) return 'checking';
   if (readings.some(point => point.sensor.status !== 'ok')) return 'unstable';
   const distances = readings.map(point => point.sensor.distance_mm);
