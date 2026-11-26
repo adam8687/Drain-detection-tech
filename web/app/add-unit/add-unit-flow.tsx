@@ -12,6 +12,7 @@ import { supabase, useSession } from '../../lib/supabase';
 import { useRecording } from './use-recording';
 import { useLiveMode } from '../../lib/use-live-mode';
 import DrainageSetup from './drainage-setup';
+import CalibrationStage, { WaterWarning } from './calibration-stage';
 import shell from '../live-demo/page.module.css';
 import styles from './page.module.css';
 
@@ -126,6 +127,8 @@ export default function AddUnitFlow() {
         </div>}
         {step==='teach'&&!restoring&&!restoreFailed&&<div className={styles.form}>
           <div><h1 id="setup-title" tabIndex={-1}>Record the empty sink</h1><p className={styles.lead}>That is the baseline: the distance from the sensor to the sink with no water in it.</p></div>
+          <CalibrationStage title="Empty sink" stage={recordId?'running':'ready'} detail={recordId?`${Math.round((recording.view?.computed.calibration_progress??0)*100)}% complete`:'Nothing is recorded until you press the button.'}/>
+          <WaterWarning/>
           <div className={styles.enrollment} role="status" aria-live="polite"><div className={styles.scanRing} style={{'--progress':`${(recording.view?.computed.calibration_progress??0)*100}%`}as CSSProperties}><span>{Math.round((recording.view?.computed.calibration_progress??0)*100)}%</span></div><strong>{recordId?'Keep the sink empty and still':'One quick empty-sink check'}</strong><p>Usually 8–10 seconds once the sensor is connected. Next, two guided drainage checks will measure this sink’s normal speed.</p></div>
           <label className={styles.check}><input type="checkbox" checked={empty} disabled={Boolean(recordId)} onChange={e=>setEmpty(e.target.checked)}/>The sink is empty, the tap is off and the sensor is fixed in place.</label>
           {!recordId?<button className={`${shell.primary} ${styles.big}`} disabled={!live.active||!empty||busy} onClick={()=>void run(async()=>setRecordId((await api.start(unit,'sensor','calibration',true)).record_id),'Could not record the empty sink.')}>Record empty sink</button>:<><progress max={1} value={recording.view?.computed.calibration_progress??0} aria-label="Empty baseline progress"/><p className={styles.note}>{recording.view?.computed.calibration_message??'Waiting for the sensor readings.'}</p><button className={shell.secondary} disabled={busy} onClick={()=>void run(async()=>{await api.finish(recordId);setRecordId(null);},'Could not stop the empty-sink check.')}>Stop and try again</button></>}

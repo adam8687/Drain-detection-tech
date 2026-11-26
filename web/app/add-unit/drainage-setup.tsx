@@ -4,6 +4,7 @@ import type{CSSProperties}from'react';
 import {DrainApi,DrainApiError}from'../../lib/api';
 import type{Calibration}from'../../lib/api';
 import {useRecording}from'./use-recording';
+import CalibrationStage from'./calibration-stage';
 import styles from'./page.module.css';
 import shell from'../live-demo/page.module.css';
 
@@ -25,7 +26,8 @@ export default function DrainageSetup({api,fixture,liveReady,calibrationId,calib
  useEffect(()=>{if(connected&&capture&&recording.view?.computed.forecast.state==='dry')void finish(capture.capture_id);},[recording.view,capture?.capture_id,connected]);
  return <div className={styles.form}>
   <div><h1 id="setup-title" tabIndex={-1}>{capture?'Release the plug':'Measure normal drainage'}</h1><p className={styles.lead}>{capture?'Keep the tap off. The check saves automatically once the sink is empty.':'Two short checks measure how quickly this sink drains. No dimensions or connection settings are needed.'}</p></div>
-  <p className={styles.note}>{count} of 2 drainage checks saved · Empty reference saved</p>
+  <CalibrationStage title="Empty sink" stage="done" detail={`Empty distance: ${calibration.empty_distance_mm} mm`}/>
+  {[0,1].map(i=><CalibrationStage key={i} title={`Drain check ${i+1} of 2`} stage={i<count?'done':i===count?(capture?'running':'ready'):'waiting'} detail={i<count?`${calibration.drainage?.runs[i]?.duration_seconds.toFixed(1)} s from 30 mm to 10 mm`:i===count&&capture?`${Math.round(progress*100)}% complete`:undefined}/>)}
   {calibration.drainage?.last_issue&&<p className={styles.error} role="alert">{calibration.drainage.last_issue}</p>}
   {!recordId?<><p>We will use the unit’s existing readings to guide the water check.</p><button className={shell.primary} disabled={busy} onClick={()=>void observe()}>Start water check</button></>:capture?<>
    <div className={styles.enrollment} role="status"><div className={styles.scanRing} style={{'--progress':`${progress*100}%`}as CSSProperties}><span>{Math.round(progress*100)}%</span></div><strong>{!connected?'Waiting for clear readings…':level!==null&&level<=8?'Confirming the sink is empty…':'Measuring the falling water level…'}</strong><p>The sensor measures the fall from 30 mm to 10 mm. Keep the tap off and the sensor still.</p></div>
