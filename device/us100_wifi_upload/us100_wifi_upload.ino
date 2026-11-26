@@ -20,7 +20,7 @@
 
 // Serial output costs time: a USB serial print can block once its buffer fills with nothing reading it, and set-up
 // waits for a monitor to attach. The build is therefore silent and the messages below compile to nothing. For a
-// diagnostic build add `#define DEBUG_SERIAL 1` here, or compile with -DDEBUG_SERIAL=1.
+// diagnostic build add `#define DEBUG_SERIAL 0` here, or compile with -DDEBUG_SERIAL=1.
 #ifndef DEBUG_SERIAL
 #define DEBUG_SERIAL 0
 #endif
@@ -275,12 +275,18 @@ void setup() {
         LOG_LINE("Recovering the original pending point to its verified cloud recording.");
       }
     }
-    if (pendingUrl != expected || pendingBody.isEmpty()) {
+    if (pendingBody.isEmpty() && (pendingUrl == expected || pendingUrl.isEmpty())) {
+      // A power cut tore the journal while it was written. Nothing readable is lost
+      // beyond that unsent batch; drop it so the board resumes instead of halting.
+      FFat.remove("/pending.txt"); pendingUrl = ""; pendingJournal = ""; batchCount = 0;
+      LOG_LINE("Dropped a batch torn by a power cut.");
+    } else if (pendingUrl != expected) {
       stop("Pending point belongs to another destination or is damaged. Restore original configuration; do not erase it."); return;
+    } else {
+      batchReady = true;  // a journaled batch is uploaded exactly as saved, never extended
+      selectRecording=false;
+      LOG_LINE("Recovering saved point(s) with their original IDs and timestamps.");
     }
-    batchReady = true;  // a journaled batch is uploaded exactly as saved, never extended
-    selectRecording=false;
-    LOG_LINE("Recovering saved point(s) with their original IDs and timestamps.");
   }
   if (USE_UART) {
     uartA.begin(9600, SERIAL_8N1, D0, D1);
