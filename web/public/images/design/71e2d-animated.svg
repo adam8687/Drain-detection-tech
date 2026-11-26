@@ -1,15 +1,16 @@
 <svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="520" height="600" viewBox="0 0 520 600" fill="none" xmlns="http://www.w3.org/2000/svg">
 <style>
-g[id="Drop"],g[id="Ripple 1"],g[id="Ripple 2"],g[id="Signal arc"],g[id="Signal arc_2"],g[id="Signal arc_3"],g[id="Sensor LED"]{transform-box:fill-box;transform-origin:center}
+g[id="Drop"],g[id="Ripple 1"],g[id="Ripple 2"],g[id="Ripple 3"],g[id="Signal arc"],g[id="Signal arc_2"],g[id="Signal arc_3"],g[id="Sensor LED"]{transform-box:fill-box;transform-origin:center}
 g[id="Drop"]{animation:drop 3.2s cubic-bezier(.55,0,1,.45) infinite}
 g[id="Ripple 1"]{animation:ripple 3.2s ease-out infinite}
 g[id="Ripple 2"]{animation:ripple 3.2s ease-out infinite;animation-delay:.12s}
+g[id="Ripple 3"]{animation:ripple 3.2s ease-out infinite;animation-delay:.24s}
 g[id="Signal arc"],g[id="Signal arc_2"],g[id="Signal arc_3"]{animation:ping 2.4s ease-in-out infinite}
 g[id="Signal arc_2"]{animation-delay:.25s}
 g[id="Signal arc_3"]{animation-delay:.5s}
 g[id="Sensor LED"]{animation:led 2.4s ease-in-out infinite}
 @keyframes drop{0%{transform:translateY(-22px);opacity:0}12%{opacity:1}62%{transform:translateY(8px);opacity:1}70%,100%{transform:translateY(8px);opacity:0}}
-@keyframes ripple{0%,62%{transform:scale(1)}74%{transform:scale(1.035)}100%{transform:scale(1)}}
+@keyframes ripple{0%,62%{transform:scale(1);opacity:1}72%{transform:scale(1.12);opacity:.75}100%{transform:scale(1);opacity:1}}
 @keyframes ping{0%,100%{opacity:.35}30%{opacity:1}}
 @keyframes led{0%,100%{opacity:.55}30%{opacity:1}}
 </style>

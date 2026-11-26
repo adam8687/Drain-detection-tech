@@ -12,8 +12,8 @@
 @media(max-width:640px) { .top { right: -270px; opacity:.7; } .bottom { left: -350px; } }
 
 /* Each layer drifts on its own slow cycle so the edges read as gently moving water. */
-.top img,.bottom img,.setupBottom img { animation: drift 14s ease-in-out infinite alternate; }
-.top img:nth-child(2),.bottom img:nth-child(2) { animation-duration: 17s; animation-delay: -6s; }
-.top img:nth-child(3),.bottom img:nth-child(3) { animation-duration: 20s; animation-delay: -11s; }
-.setupBottom img { animation-duration: 18s; }
-@keyframes drift { from { translate: -6px 0; } to { translate: 6px 4px; } }
+.top img,.bottom img,.setupBottom img { animation: drift 9s ease-in-out infinite alternate; }
+.top img:nth-child(2),.bottom img:nth-child(2) { animation-duration: 11s; animation-delay: -4s; }
+.top img:nth-child(3),.bottom img:nth-child(3) { animation-duration: 13s; animation-delay: -7s; }
+.setupBottom img { animation-duration: 12s; }
+@keyframes drift { 0% { translate: -18px 0; } 50% { translate: 0 8px; } 100% { translate: 18px 2px; } }
