@@ -16,6 +16,19 @@ test('water check needs empty calibration and fresh sensor evidence, not a guess
  const ready=setupGuidance(record([point('first',40,-500),point('ready',40)]),now);
  assert.equal(ready.phase,'water_ready');assert.match(ready.message,/Turn the tap off/);assert.equal(ready.water_depth_mm,40);
 });
+test('guided setup detects unusable empty-sink references before asking for water',()=>{
+ assert.equal(setupGuidance(record([],{empty_distance_mm:26}),now).phase,'needs_calibration');
+ const farther=[point('first',-470,-1000),point('second',-469,-500),point('third',-470)];
+ assert.equal(setupGuidance(record(farther),now).phase,'needs_calibration');
+ assert.equal(setupGuidance(record(farther.slice(-1)),now).phase,'sensor_problem');
+});
+test('two recent high-water readings allow capture between normal device batches',()=>{
+ const held=[point('held-1',42,-7000),point('held-2',42,-6500)];
+ assert.equal(setupGuidance(record(held),now).phase,'water_ready');
+ assert.equal(setupGuidance(record([point('low',10,-6500)]),now).phase,'sensor_problem');
+ assert.equal(setupGuidance(record([point('early',42,-6400),point('late',42,-1000)]),now).phase,'confirm_water');
+});
+
 test('setup requires three distinct and steady readings from a fresh batch without changing connection status', () => {
  const newest=Date.now()-500;
  const sample=(id,depth,ms,failed=false)=>({...point(id,depth,0,failed),timestamp:new Date(newest+ms).toISOString()});

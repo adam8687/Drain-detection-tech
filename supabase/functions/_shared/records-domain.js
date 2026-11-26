@@ -1,4 +1,4 @@
-import {validateDrainageCalibration,drainageProfileOf,judgeDrainage} from './drainage-calibration.js';
+import {DRAIN_CALIBRATION,validateDrainageCalibration,drainageProfileOf,judgeDrainage} from './drainage-calibration.js';
 import { isDeepStrictEqual } from 'node:util';
 import { ApiError, object, number, uuid, timestamp, deviceId } from './validation.js';
 
@@ -395,18 +395,30 @@ export function setupGuidance(record, now = Date.now()) {
 }
 
 function waterSetupGuidance(points, calibration, now) {
-  const latest = points.at(-1), target = 40;
+  const latest = points.at(-1), target = DRAIN_CALIBRATION.fillTarget;
   const reply = (phase, message, water_depth_mm = null) => ({phase, message, water_depth_mm, target_depth_mm:target});
   if (!calibration) return reply('needs_calibration','Record the empty basin first.');
+  if (calibration.empty_distance_mm < target + DRAIN_CALIBRATION.minSensorDistance) {
+    return reply('needs_calibration','The saved empty-sink distance is too short for this check. Turn off the tap, empty the sink and aim the sensor at the basin before recording again.');
+  }
   if (!latest) return reply('waiting','Waiting for the device. Keep the tap off until readings arrive.');
-  if (!setupReadingIsFresh(latest, now)) return reply('sensor_problem','Pause filling and wait for a fresh reading.');
+  const latestTime = Date.parse(latest.timestamp);
+  if (latestTime > now || now - latestTime > DRAIN_CALIBRATION.freshMs) return reply('sensor_problem','Turn off the tap and wait for a fresh reading.');
   const values = depths(latest,calibration);
+  const recent = points.slice(-3);
+  if (recent.length === 3 && new Set(recent.map(point => point.timestamp)).size === 3 && recent.every(point =>
+    setupReadingIsFresh(point, now) && point.sensor.status === 'ok' && point.sensor.distance_mm > calibration.empty_distance_mm + 20)) {
+    return reply('needs_calibration','The current distance is farther than the saved empty-sink reference. Turn off the tap, empty the sink and check the sensor mount before recording again.');
+  }
   if (!values) return reply('sensor_problem','The sensor needs a clear reading. Turn the tap off and check its position.');
   const level = Math.max(...values);
+  if (level < target && !setupReadingIsFresh(latest, now)) return reply('sensor_problem','Turn off the tap and wait for a fresh reading.');
   if (level < target) return reply('add_water',`Put the plug in and run the tap gently. Aim for about ${target} mm of water, well below the rim.`,level);
   const previous = points.at(-2);
-  if (!previous || !setupReadingIsFresh(previous, now) || Date.parse(previous.timestamp) >= Date.parse(latest.timestamp) ||
+  const gap = previous ? latestTime - Date.parse(previous.timestamp) : Infinity;
+  if (gap <= 0 || gap > SETUP_READING_MAX_AGE_MS ||
       (depths(previous, calibration)?.[0] ?? 0) < target) {
+    if (!setupReadingIsFresh(latest, now)) return reply('sensor_problem','Turn off the tap and wait for a fresh reading.');
     return reply('confirm_water', 'Pause filling while the sensor confirms the water level.', level);
   }
   return reply('water_ready','Enough water. Turn the tap off, keep the plug in, then start the drain test.',level);
