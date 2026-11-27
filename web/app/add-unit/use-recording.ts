@@ -16,15 +16,18 @@ export function useRecording(api: DrainApi, recordId: string | null) {
     const load = async () => {
       if(document.hidden){timer=setTimeout(load,1000);return;}
       try {
-        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(4000)]);
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
         const next = await api.record(recordId, null, signal, 1);
         if (controller.signal.aborted) return;
         setView(next); setError('');
         if (next.record.recording_status === 'recording') timer = setTimeout(load, LIVE_RECORD_POLL_MS);
       } catch (err) {
         if (controller.signal.aborted) return;
-        setError(err instanceof DrainApiError && err.status===401 ? 'Please sign in again to continue setup.' : 'We could not connect to your unit. Try again, or contact your installer.');
-        timer = setTimeout(load, 5000);
+        const status = err instanceof DrainApiError ? err.status : null;
+        setError(status === 401 ? 'Please sign in again to continue setup.' :
+          status === 404 ? 'This recording is unavailable. Reopen setup to recover the current recording.' :
+          'The app will retry. Check your internet connection if this continues.');
+        timer = setTimeout(load, 2000);
       }
     };
     void load();

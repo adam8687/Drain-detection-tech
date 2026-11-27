@@ -34,6 +34,26 @@ test('interrupted, refilled, unresolved and inconsistent trials cannot silently 
  const spike=drain(source);spike.measurements[8].sensor.distance_mm=268;assert.equal(updateDrainageCalibration(start,spike,{action:'complete',capture_id:id},id,time+20000).calibration.drainage.runs.length,1,'one stray echo is not a refill');
  const cancelled=updateDrainageCalibration(start,null,{action:'cancel',capture_id:id},id,time+1000);assert.equal(cancelled.calibration.drainage.active_capture,null);assert.deepEqual(cal.calibration,{empty_distance_mm:300});
 });
+test('a drain crossing both thresholds between two samples saves the interval as its upper bound',()=>{
+ const source=monitoring(),id=randomUUID();
+ const armed=updateDrainageCalibration(calibration(),source,{action:'start'},id,time+1);
+ const observed={...source,measurements:[...source.measurements,point(time+3000,0),point(time+3500,0),point(time+4000,0)]};
+ const result=updateDrainageCalibration(armed,observed,{action:'complete',capture_id:id},id,time+4100);
+ assert.equal(result.calibration.drainage.active_capture,null);
+ assert.equal(result.calibration.drainage.runs[0].duration_seconds,3);
+});
+test('a sustained mismatch during a drainage check prompts a new empty reference',()=>{
+ const source=monitoring(),id=randomUUID();
+ const started=updateDrainageCalibration(calibration(),source,{action:'start'},id,time+1);
+ const farther=Array.from({length:11},(_,i)=>point(time+(i+1)*500,-60));
+ const first={...source,measurements:[...source.measurements,...farther.slice(0,4)]};
+ assert.throws(()=>updateDrainageCalibration(started,first,{action:'complete',capture_id:id},id,time+2000),e=>e.code==='drainage_pending');
+ const changed={...source,measurements:[...source.measurements,...farther]};
+ const result=updateDrainageCalibration(started,changed,{action:'complete',capture_id:id},id,time+5500);
+ assert.match(result.calibration.drainage.last_issue,/redo the empty-sink reference/);
+ assert.equal(result.calibration.drainage.active_capture,null);
+ assert.equal(result.calibration.drainage.runs.length,0);
+});
 test('cancelled or duplicate requests cannot overwrite another capture and existing empty-only records remain valid',()=>{
  const cal=calibration(),source=monitoring(),id=randomUUID(),start=updateDrainageCalibration(cal,source,{action:'start'},id,time+1);
  assert.equal(updateDrainageCalibration(start,source,{action:'start'},randomUUID(),time+2),start);assert.throws(()=>updateDrainageCalibration(start,source,{action:'cancel',capture_id:randomUUID()},randomUUID(),time+3),e=>e.code==='capture_changed');assert.deepEqual(calibrationSnapshot(cal.calibration),{empty_distance_mm:300});assert.deepEqual(validateDrainageCalibration(emptyDrainageCalibration()),emptyDrainageCalibration());
@@ -51,7 +71,7 @@ test('Node and hosted owner APIs save the metric without changing the sensor str
   await accessStore.insert('device_members',{id:randomUUID(),device_id:'sink',user_id:'viewer-id',role:'viewer',created_at:new Date().toISOString()});
   const key=(await call('/devices/sink/keys','owner',{})).data.key;
   const empty=(await call('/records','owner',{fixture_id:'sink',record_type:'calibration',data_source:'sensor',confirm_empty:true})).data;
-  for(let i=0;i<20;i++)assert.equal((await call(`/records/${empty.record_id}/measurements`,key,point(Date.now()-10000+i*500,0))).status,201);
+  assert.equal((await call(`/records/${empty.record_id}/measurements`,key,{measurements:Array.from({length:20},(_,i)=>point(Date.now()-10000+i*500,0))})).status,201);
   const reference=await store.get(empty.record_id),source=(await call('/records','owner',{fixture_id:'sink',record_type:'monitoring',data_source:'sensor'})).data;
   assert.deepEqual(source.calibration,{empty_distance_mm:300});
   const endpoint=`/records/${empty.record_id}/drainage-calibration`;

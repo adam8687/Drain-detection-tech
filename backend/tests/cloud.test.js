@@ -20,10 +20,10 @@ test('ESP trust configuration selects only a valid matching trusted root',()=>{
   assert.throws(()=>selectTrustedRoot([first.cert.raw],[other.pem]));
   assert.throws(()=>selectTrustedRoot([first.cert.raw],[first.pem],Date.parse(first.cert.validTo)+1000));
 });
-function setup(t) {
+function setup(t, clock = () => Date.now()) {
   const store = new SQLiteRecordStore(':memory:'), accessStore = new SQLiteStore(':memory:');
   t.after(async () => { await store.close(); await accessStore.close(); });
-  const handler = createCloudHandler({ url:'https://test.supabase.co',serviceKey:'sb_secret_test',adminToken:ADMIN,origins:['http://localhost:3000'] }, {store,accessStore,verifyUser:async token=>({'alice':'alice-id','bob':'bob-id'}[token] || null)});
+  const handler = createCloudHandler({ url:'https://test.supabase.co',serviceKey:'sb_secret_test',adminToken:ADMIN,origins:['http://localhost:3000'] }, {store,accessStore,clock,verifyUser:async token=>({'alice':'alice-id','bob':'bob-id'}[token] || null)});
   const call = async (path, token = ADMIN, body, method) => {
     const response = await handler(new Request(`https://test.supabase.co/functions/v1/drain-api${path}`, {method:method || (body === undefined ? 'GET':'POST'),headers:{'Content-Type':'application/json',...(token ? {Authorization:`Bearer ${token}`} : {})},...(body === undefined ? {}:{body:typeof body === 'string' ? body:JSON.stringify(body)})}));
     return {status:response.status,body:await response.json()};
@@ -43,6 +43,105 @@ test('cloud rejects anonymous access and short admin tokens; validates JSON, siz
   assert.equal((await call(`/api/v1/records/${row.record_id}/measurements`,ADMIN,'x'.repeat(17000))).status,413);
   assert.equal((await handler(new Request('https://test/drain-api/api/v1/records',{method:'OPTIONS',headers:{Origin:'https://untrusted.test'}}))).status,403);
   assert.equal((await handler(new Request('https://test/drain-api/api/v1/records',{method:'OPTIONS',headers:{Origin:'http://localhost:3000'}}))).status,204);
+});
+test('setup reports provisioning to the owner without returning device credentials', async t => {
+  const { call } = setup(t);
+  await call('/api/v1/devices', 'alice', { device_id: 'setup-sink', name: 'Setup sink' });
+  const path = '/api/v1/devices/setup-sink';
+  assert.deepEqual((await call(path + '/setup', 'alice')).body, { provisioned: false });
+  await call(path + '/view-key', 'alice', {});
+  assert.deepEqual((await call(path + '/setup', 'alice')).body, { provisioned: false });
+  const { key } = (await call(path + '/keys', 'alice', {})).body;
+  assert.deepEqual((await call(path + '/setup', 'alice')).body, { provisioned: true });
+  assert.equal((await call(path + '/setup', key)).status, 403);
+  assert.equal((await call(path + '/setup', 'bob')).status, 404);
+});
+test('a journaled Wi-Fi batch can recover from a deleted recording without writing to a new one', async t => {
+  const { handler, call, point } = setup(t);
+  const fixture = 'reconnected-sink';
+  await call('/api/v1/devices', 'alice', { device_id: fixture, name: 'Reconnected sink' });
+  const { key } = (await call(`/api/v1/devices/${fixture}/keys`, 'alice', {})).body;
+  const active = (await call('/api/v1/records', 'alice', { fixture_id: fixture, data_source: 'sensor', record_type: 'calibration', confirm_empty: true })).body;
+  const missing = randomUUID();
+  const path = `/api/v1/records/${missing}/measurements`;
+  assert.equal((await call(path, key, point(Date.now()))).status, 404);
+  const result = await handler(new Request(`https://test${path}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'X-Drain-Live-Capability': '1' },
+    body: JSON.stringify(point(Date.now())),
+  }));
+  assert.equal(result.status, 409);
+  assert.equal((await result.json()).error.code, 'record_finished');
+  const discovered = await call('/api/v1/sensor/active-record', key);
+  assert.equal(discovered.body.record.record_id, active.record_id);
+  const current = await call(`/api/v1/records/${active.record_id}`, 'alice');
+  assert.equal(current.body.record.measurements.length, 0);
+});
+test('Wi-Fi onboarding recovers a pending batch, calibrates on one recording, and starts monitoring', async t => {
+  let now = Date.now() - 60000;
+  const { handler, call, point } = setup(t, () => now);
+  const fixture = 'wifi-setup';
+  const device = `/api/v1/devices/${fixture}`;
+  const records = '/api/v1/records';
+  assert.equal((await call('/api/v1/devices', 'alice', { device_id: fixture, name: 'Wi-Fi setup sink' })).status, 201);
+  assert.deepEqual((await call(device + '/setup', 'alice')).body, { provisioned: false });
+  const { key } = (await call(device + '/keys', 'alice', {})).body;
+  const start = async (record_type, confirm_empty) => {
+    const result = await call(records, 'alice', {
+      fixture_id: fixture, data_source: 'sensor', record_type, ...(confirm_empty ? { confirm_empty } : {}),
+    });
+    assert.equal(result.status, 201);
+    return result.body.record_id;
+  };
+  const read = async id => (await call(`${records}/${id}?window=1`, 'alice')).body;
+  const discover = async id => assert.equal((await call('/api/v1/sensor/active-record', key)).body.record.record_id, id);
+  const send = async (id, measurements) => {
+    const reply = await call(`${records}/${id}/measurements`, key, { measurements });
+    assert.equal(reply.status, 201);
+  };
+  const calibration = await start('calibration', true);
+  const orphan = await handler(new Request(`https://test${records}/${randomUUID()}/measurements`, {
+    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'X-Drain-Live-Capability': '1' },
+    body: JSON.stringify({ measurements: [point(now - 500)] }),
+  }));
+  assert.equal(orphan.status, 409);
+  assert.equal((await orphan.json()).error.code, 'record_finished');
+  await discover(calibration);
+  await send(calibration, Array.from({ length: 8 }, (_, i) => ({
+    ...point(now - 9000 + i * 500), sensor: { status: 'timeout', distance_mm: null },
+  })));
+  assert.match((await read(calibration)).computed.calibration_message, /not returning a distance/);
+  await send(calibration, Array.from({ length: 10 }, (_, i) => point(now + i * 500)));
+  assert.equal((await read(calibration)).record.recording_status, 'recording');
+  await send(calibration, Array.from({ length: 10 }, (_, i) => point(now + 5000 + i * 500)));
+  const calibrated = await read(calibration);
+  assert.equal(calibrated.record.recording_status, 'finished');
+  assert.equal(calibrated.record.calibration.empty_distance_mm, 300);
+
+  const observation = await start('monitoring');
+  await discover(observation);
+  const drainage = `${records}/${calibration}/drainage-calibration`;
+  for (let check = 1; check <= 2; check++) {
+    now += 18000;
+    await send(observation, [point(now - 500, 260), point(now, 260)]);
+    const arm = await call(drainage, 'alice', {
+      action: 'start', recording_id: observation, confirm_tap_off: true, confirm_clear: true,
+    });
+    assert.equal(arm.status, 200);
+    const capture = arm.body.calibration.drainage.active_capture;
+    assert.equal(capture.recording_id, observation);
+    await send(observation, [40, 36, 32, 30, 27.5, 25, 22.5, 20, 17.5, 15, 12.5, 10, 7.5, 5, 2.5, 0, 0, 0]
+      .map((depth, i) => point(now + (i + 1) * 500, 300 - depth)));
+    now += 9000;
+    const saved = await call(drainage, 'alice', { action: 'complete', capture_id: capture.capture_id });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.calibration.drainage.runs.length, check);
+    assert.equal(saved.body.calibration.drainage.status, check === 2 ? 'ready' : 'collecting');
+  }
+  await call(`${records}/${observation}/finish`, 'alice', {});
+  const monitoring = await start('monitoring');
+  await discover(monitoring);
+  await send(monitoring, [point(now + 500), point(now + 1000), point(now + 1500)]);
+  assert.equal((await read(monitoring)).computed.sample_count, 3);
 });
 test('cloud retains ownership, viewer roles, sensor-only appends and fixture scope',async t=>{
   const {call,point,accessStore}=setup(t);
@@ -113,7 +212,7 @@ test('cloud calibrates, computes drainage and replay identically, and freezes co
   assert.equal((await call('/api/v1/records',ADMIN,{fixture_id:'sink',record_type:'calibration',data_source:'sensor'})).status,422);
   assert.equal((await call('/api/v1/records',ADMIN,{fixture_id:'sink',record_type:'drainage',data_source:'sensor'})).status,409);
   const calibration=await start('calibration');
-  for(let i=0;i<20;i++) assert.equal((await call(`/api/v1/records/${calibration.record_id}/measurements`,ADMIN,point(base+i*500,400,420))).status,201);
+  assert.equal((await call(`/api/v1/records/${calibration.record_id}/measurements`,ADMIN,{measurements:Array.from({length:20},(_,i)=>point(base+i*500,400,420))})).status,201);
   const learned=await store.get(calibration.record_id);
   assert.equal(learned.recording_status,'finished');
   assert.deepEqual(learned.calibration,{empty_distance_mm: 400});

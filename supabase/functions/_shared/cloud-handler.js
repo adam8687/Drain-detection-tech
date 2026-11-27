@@ -46,7 +46,13 @@ export function createCloudHandler(config, {
   };
   if(config.emailWorkerToken&&config.emailWorkerToken.length<32)throw Error('Email worker token must have at least 32 characters');
   if (config.adminToken && config.adminToken.length < 32) throw Error('Cloud admin token must have at least 32 characters');
-  const get = async id => { const row = await store.get(uuid(id, 'record_id')); if (!row) throw new ApiError(404, 'record_not_found', 'Recording not found'); return row; };
+  const get = async (id, recoverOrphanedBatch = false) => {
+    const row = await store.get(uuid(id, 'record_id'));
+    if (row) return row;
+    // The Wi-Fi uploader archives this batch under the original ID and discovers the next recording.
+    if (recoverOrphanedBatch) throw new ApiError(409, 'record_finished', 'The original recording is gone. Discover the active recording.');
+    throw new ApiError(404, 'record_not_found', 'Recording not found');
+  };
   const authorize = async request => {
     const header = request.headers.get('authorization') || '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
@@ -114,6 +120,13 @@ export function createCloudHandler(config, {
         if(!who.admin&&!who.emailWorker)throw new ApiError(403,'forbidden','Worker access required');return json(200,await notifications.flush());
       }
       const emailSettings=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/notifications$/);
+      const setupRoute = path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/setup$/);
+      if (setupRoute && request.method === 'GET') {
+        const fixture = deviceId(setupRoute[1]);
+        await access(who, fixture, true);
+        const keys = await accessStore.list('device_keys', { device_id: fixture });
+        return json(200, { provisioned: keys.some(key => key.kind !== 'viewer' && !key.revoked_at) });
+      }
       const liveRoute=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/live-mode$/);
       if(liveRoute&&['GET','POST'].includes(request.method)){
         const fixture=deviceId(liveRoute[1]);await access(who,fixture,true);
@@ -204,7 +217,10 @@ export function createCloudHandler(config, {
       }
       const match = path.match(/^\/api\/v1\/records\/([0-9a-f-]+)(?:\/(measurements|finish|drainage-calibration))?$/i);
       if (match) {
-        const [, id, action] = match; const row = await get(id);
+        const [, id, action] = match;
+        const recoverOrphanedBatch = Boolean(who.deviceId && action === 'measurements' && request.method === 'POST' &&
+          request.headers.get('x-drain-live-capability') === '1');
+        const row = await get(id, recoverOrphanedBatch);
         if (!action && request.method === 'GET') {
           await access(who, row.fixture_id); const raw = url.searchParams.get('sample'), sample = raw === null ? null : Number(raw);
           if (sample !== null && (!Number.isInteger(sample) || sample < 0)) fail('sample must be nonnegative integer');

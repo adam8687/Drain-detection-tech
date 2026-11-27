@@ -100,30 +100,35 @@ async function journey(profile,index){
     await navigation.click();await page.getByRole('navigation',{name:'Mobile navigation',exact:true}).waitFor();
     await page.keyboard.press('Escape');assert.equal(await navigation.evaluate(el=>el.parentElement.open),false);checks.push('mobile menu keyboard dismissal');
   }
-  await page.getByRole('button',{name:'Add and continue'}).click();await page.getByRole('button',{name:'Start connection test'}).waitFor();
+  await page.getByRole('button',{name:'Add and continue'}).click();
+  await page.getByText('Installer setup needed',{exact:true}).waitFor();
   await check('registration writes a recoverable URL',()=>assert.ok(page.url().includes(`fixture=${fixture}`)));
-  // Installer-side provisioning is outside the customer browser. No credential
-  // response reaches the customer and the authentication rules stay unchanged.
-  const provisioned=await fetch(`${backend}/api/v1/devices/${fixture}/keys`,{method:'POST',headers:{authorization:'Bearer local-product-test-admin','content-type':'application/json'},body:'{}'});assert.equal(provisioned.status,201);sensorKey=(await provisioned.json()).key;
+  // Provision outside the browser. Setup only receives a yes/no status.
+  const provisioned=await fetch(`${backend}/api/v1/devices/${fixture}/keys`,{method:'POST',headers:{authorization:'Bearer local-product-test-admin','content-type':'application/json'},body:'{}'});
+  assert.equal(provisioned.status,201);sensorKey=(await provisioned.json()).key;
+  await page.getByLabel('The sink is empty',{exact:false}).check();
   await check('device credential stays outside customer setup',async()=>{assert.equal(credentialRequests,0);assert.ok(!(await page.locator('body').innerText()).includes(sensorKey));});
-  await page.getByRole('button',{name:'Start connection test'}).click();await page.reload();
-  await check('refresh recovers active connection test',()=>page.getByRole('heading',{name:`Connect ${fixture}`}).waitFor());
-  await append([sample(Date.now(),0,true)]);await check('one failed sensor prevents continuing',async()=>{await page.getByText('Check the sensor',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
-  await check('setup waits for the device to confirm live delivery',async()=>{const r=await fetch(`${backend}/api/v1/devices/${fixture}/live-mode`,{headers:{authorization:`Bearer ${token}`}});const state=await r.json();assert.equal(state.requested,true);assert.equal(state.active,false);assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);});
-  // One upload receives the live command; the next confirms the device applied it.
-  // Keep sending during the handshake, as the physical board does.
-  const continueSetup=page.getByRole('button',{name:'Continue',exact:true});
-  for(let i=0;i<2;i++){
-    await new Promise(r=>setTimeout(r,500));
-    await append([sample(Date.now())]);
-  }
-  assert.ok(await continueSetup.isDisabled(),'two readings with a preceding failure do not confirm a steady signal');
-  await new Promise(r=>setTimeout(r,500));
-  await append([sample(Date.now())]);
-  await continueSetup.click();
-  await page.getByLabel('The sink is empty',{exact:false}).check();await page.getByRole('button',{name:'Record empty sink',exact:false}).click();
-  await append(Array.from({length:20},(_,i)=>sample(Date.now()-30000+i*500,i%2?14:0)),'calibration');
+  await page.getByRole('button',{name:'Connect and record empty sink',exact:true}).click();
+  const baselineRecording=await active('calibration');
+  await page.reload();
+  await check('refresh recovers the same active empty-sink check',async()=>{
+    await page.getByRole('heading',{name:`Connect and calibrate ${fixture}`}).waitFor();
+    await page.getByRole('button',{name:'Stop check',exact:true}).waitFor();
+    assert.equal((await active('calibration')).record_id,baselineRecording.record_id);
+  });
+  await append([sample(Date.now()-40000,0,true)],'calibration');
+  await check('sensor timeouts stay distinct from lost connections',async()=>{
+    await append([sample(Date.now(),0,true)],'calibration');
+    await page.getByText('Device online, sensor has no distance',{exact:true}).waitFor();
+  });
+  await page.getByRole('button',{name:'Stop check',exact:true}).click();
+  await page.getByLabel('The sink is empty',{exact:false}).check();
+  await page.getByRole('button',{name:'Connect and record empty sink',exact:true}).click();
+  await append(Array.from({length:20},(_,i)=>sample(Date.now()-10500+i*500,i%2?14:0)),'calibration');
   await check('unstable empty readings cannot finish calibration',async()=>{await page.getByText('Keep the sink empty and the sensor mount still.',{exact:true}).waitFor();assert.equal(await page.getByText('Build your drain profile',{exact:true}).count(),0);});
+  await page.getByRole('button',{name:'Stop check',exact:true}).click();
+  await page.getByLabel('The sink is empty',{exact:false}).check();
+  await page.getByRole('button',{name:'Connect and record empty sink',exact:true}).click();
   await append(Array.from({length:20},(_,i)=>sample(Date.now()-10000+i*500)),'calibration');
   await page.getByRole('heading',{name:'Measure normal drainage',exact:true}).waitFor();
   await check('empty reference alone does not mark drainage calibration ready',async()=>{assert.equal(await page.getByRole('button',{name:'Start monitoring',exact:true}).count(),0);});
@@ -132,10 +137,10 @@ async function journey(profile,index){
   for(let run=1;run<=2;run++){
     await append([sample(Date.now(),40)],'monitoring');
     await page.getByText('Pause filling while the sensor confirms the level.',{exact:true}).waitFor();
-    assert.ok(await page.getByRole('button',{name:`Start drainage check ${run} of 2`,exact:true}).isDisabled());
+    assert.equal(await page.getByRole('button',{name:`Start drainage check ${run} of 2`,exact:true}).count(),0);
     await append([sample(Date.now(),40)],'monitoring');
-    await page.getByText('Enough water. Turn the tap off.',{exact:true}).waitFor();
-    await page.getByLabel('This drain is known to be clear and working normally.',{exact:true}).check();await page.getByLabel('The tap is off and the plug is still in.',{exact:true}).check();
+    await page.getByText(/Enough water. Turn the tap off/).waitFor();
+    await page.getByLabel('The drain is clear, the tap is off, and the plug is still in.',{exact:true}).check();
     await append([sample(Date.now(),40)],'monitoring');await page.getByRole('button',{name:`Start drainage check ${run} of 2`,exact:true}).click();await page.getByRole('heading',{name:'Release the plug',exact:true}).waitFor();
     if(run===1){await page.reload();await check('reload resumes the same drainage capture',()=>page.getByRole('heading',{name:'Release the plug',exact:true}).waitFor());}
     assert.equal((await active('monitoring')).record_id,observation.record_id);
@@ -143,12 +148,12 @@ async function journey(profile,index){
     if(run===1)await page.getByText('1 of 2 drainage checks saved · Empty reference saved',{exact:true}).waitFor();
   }
   await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();
-  await check('two controlled checks save calibration without changing the sensor stream',async()=>{const all=await app.store.list({fixture_id:fixture},100);const cal=all.find(r=>r.record_type==='calibration'&&r.calibration?.drainage?.status==='ready');assert.ok(cal);assert.equal(cal.calibration.drainage.runs.length,2);assert.ok(cal.calibration.drainage.baseline_duration_seconds>0);assert.ok(cal.calibration.drainage.runs.every(r=>r.recording_id===observation.record_id));await page.getByText('Empty distance: 300 mm',{exact:true}).waitFor();});
+  await check('two controlled checks save calibration without changing the sensor stream',async()=>{const all=await app.store.list({fixture_id:fixture},100);const cal=all.find(r=>r.record_type==='calibration'&&r.calibration?.drainage?.status==='ready');assert.ok(cal);assert.equal(cal.calibration.drainage.runs.length,2);assert.ok(cal.calibration.drainage.baseline_duration_seconds>0);assert.ok(cal.calibration.drainage.runs.every(r=>r.recording_id===observation.record_id));await page.getByText('300 mm',{exact:true}).waitFor();});
   offline=true;await page.reload();await page.getByRole('button',{name:'Retry saved setup',exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Start monitoring',exact:true}).count(),0);
   offline=false;await page.getByRole('button',{name:'Retry saved setup',exact:true}).click();
   await check('failed setup restore blocks actions and recovers',()=>page.getByRole('button',{name:'Start monitoring',exact:true}).waitFor());
-  await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();await page.getByText('Two consistent tap-off checks are saved in this unit’s calibration for later alert comparisons.',{exact:true}).waitFor();await layout('ready');
+  await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();await page.getByText('The empty-sink reference and both drainage checks are saved.',{exact:true}).waitFor();await layout('ready');
   await page.screenshot({path:`${output}/${profile.name}-calibration-ready.png`,fullPage:true});
   await page.getByRole('button',{name:'Start monitoring',exact:true}).click();await page.waitForURL('**/live-demo?**');await page.getByText('Empty reference saved. Watching for water.',{exact:true}).first().waitFor();await layout('live-monitoring');
   const recordingCard=page.getByRole('region',{name:'Monitoring recording'});

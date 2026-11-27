@@ -67,6 +67,9 @@ export class DrainApi {
     if(search)query.set('q',search);
     return this.request<{units:FleetSummary[];next_cursor:string|null}>(`/fleet?${query}`,'GET',undefined,signal);
   }
+  setupStatus(fixture: string, signal?: AbortSignal) {
+    return this.request<{ provisioned: boolean }>(`/devices/${encodeURIComponent(fixture)}/setup`, 'GET', undefined, signal);
+  }
   liveMode(fixture:string,signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'GET',undefined,signal);}
   setLiveMode(fixture:string,session_id:string,enabled:boolean,reason:'demo'|'calibration',signal?:AbortSignal){return this.request<LiveModeState>(`/devices/${encodeURIComponent(fixture)}/live-mode`,'POST',{session_id,enabled,reason},signal);}
   releaseLiveMode(fixture:string,session_id:string,reason:'demo'|'calibration'){return this.fetcher(`${this.baseUrl}/api/v1/devices/${encodeURIComponent(fixture)}/live-mode`,{method:'POST',keepalive:true,cache:'no-store',headers:{'Content-Type':'application/json',...(this.token?{Authorization:`Bearer ${this.token}`}:{})},body:JSON.stringify({session_id,enabled:false,reason})});}

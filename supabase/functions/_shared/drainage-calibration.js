@@ -120,7 +120,16 @@ export function measureDrawdown(record,capture,empty,now=Date.now()){
  if(index<0)return{issue:'The start reading is unavailable. Please restart the drainage check.'};
  const window=points.slice(index),kept=cleanReadings(window,empty);let dry=0,end=-1;
  for(let i=0;i<kept.length;i++){dry=kept[i].s<=DRAIN_CALIBRATION.dry?dry+1:0;if(dry>=3){end=i;break;}}
- if(end<0)return{waiting:true};
+ if(end<0){
+  const latest=window.at(-1),latestTime=Date.parse(latest.timestamp);
+  const far=window.filter(p=>Date.parse(p.timestamp)>=Math.max(latestTime-6000,Date.parse(capture.confirmed_at)));
+  if (latestTime<=now && now-latestTime<=DRAIN_CALIBRATION.freshMs && far.length>=3 &&
+      latestTime-Date.parse(far[0].timestamp)>=4000 &&
+      far.every(p=>p.sensor.status==='ok'&&p.sensor.distance_mm>empty+20)) {
+   return {issue:'The sensor is reading farther than the saved empty reference. Empty the sink, check the mount, and redo the empty-sink reference.'};
+  }
+  return {waiting:true};
+ }
  const samples=kept.slice(0,end+1),last=samples.at(-1);
  if(last.t>now)return{waiting:true};
  const total=window.filter(p=>Date.parse(p.timestamp)<=last.t).length,dropped=total-samples.length;
@@ -128,7 +137,7 @@ export function measureDrawdown(record,capture,empty,now=Date.now()){
  if(samples.some((x,i)=>i&&x.t-samples[i-1].t>DRAIN_CALIBRATION.maxGapMs))return{issue:'Readings were interrupted. Keep the sensor still and repeat this drainage check.'};
  if(samples[0].s<35)return{issue:'There was not enough water at the start. Repeat using the fill indicator, safely below the rim.'};
  const crossings=[];
- for(const level of levels){let found=null;for(let i=1;i<samples.length;i++){const before=samples[i-1].s,after=samples[i].s;if(before>=level&&after<=level&&before>after){const a=samples[i-1].t,b=samples[i].t;found={time:a+(before-level)/(before-after)*(b-a),span:(b-a)/1000};break;}}if(!found)return{issue:'The complete drainage range was not observed. Please repeat the check.'};crossings.push(found);}
+ for(const level of levels){let found=null;for(let i=1;i<samples.length;i++){const before=samples[i-1].s,after=samples[i].s;if(before>=level&&after<=level&&before>after){const a=samples[i-1].t,b=samples[i].t;found={time:a+(before-level)/(before-after)*(b-a),span:(b-a)/1000,beforeTime:a,afterTime:b};break;}}if(!found)return{issue:'The complete drainage range was not observed. Please repeat the check.'};crossings.push(found);}
  // The crossing time is only known to within one sampling interval, so allow for that before calling it early.
  if(crossings[0].time+crossings[0].span*1000<Date.parse(capture.confirmed_at))return{issue:'Water started draining before the check began. Keep the plug in until the app asks you to release it.'};
  const within=samples.filter(x=>x.t>=crossings[0].time&&x.t<=crossings.at(-1).time);
@@ -138,7 +147,9 @@ export function measureDrawdown(record,capture,empty,now=Date.now()){
  // A healthy drain can empty between two readings. Accept it as an upper bound (time plus sampling interval) instead
  // of rejecting it: the profile is then marked instant and judged by the predetermined floors.
  const tooFast=within.length<3||seconds<=0||uncertainty>Math.max(1,seconds*.5);
- const bound=seconds+uncertainty;
+ // Bound a fast run by the actual samples bracketing the thresholds. When one
+ // pair covers both thresholds, the same interval must only be counted once.
+ const bound=(crossings.at(-1).afterTime-crossings[0].beforeTime)/1000;
  if(tooFast&&bound>DRAIN_CALIBRATION.instantMaxSeconds)return{issue:within.length<3?'This drain was faster than the available readings can measure reliably. Ask your installer to check the measurement setup.':'The readings are too widely spaced for a reliable drainage measurement. Ask your installer to check the measurement setup.'};
  const duration=tooFast?bound:seconds,bandSeconds=tooFast?levels.slice(0,-1).map(()=>bound/4):levels.slice(0,-1).map((level,i)=>(crossings[i+1].time-crossings[i].time)/1000);
  return{run:{capture_id:capture.capture_id,recording_id:record.record_id,from_reading_id:capture.from_reading_id,to_reading_id:last.p.reading_id,confirmed_at:capture.confirmed_at,ended_at:last.p.timestamp,duration_seconds:round(duration),recession_mm_per_second:round(20/duration),uncertainty_seconds:round(uncertainty),sample_count:samples.length,bands:levels.slice(0,-1).map((level,i)=>({from_depth_mm:level,to_depth_mm:levels[i+1],duration_seconds:Math.max(.001,round(bandSeconds[i]))}))}};
@@ -172,6 +183,7 @@ export function updateDrainageCalibration(calibrationRecord,observation,input,ca
  if(!current.active_capture||current.active_capture.capture_id!==input.capture_id)issue('This drainage check is no longer active',409,'capture_changed');
  let result=measureDrawdown(observation,current.active_capture,calibrationRecord.calibration.empty_distance_mm,now);
  // A capture that never reaches an empty basin (tap dripping, plug closed, residual water) must not wait forever.
+ if(result.waiting && observation.recording_status==='finished') result={issue:'The water-check recording ended before the sink was confirmed empty. Reconnect the water check and try again.'};
  if(result.waiting&&now-Date.parse(current.active_capture.confirmed_at)>DRAIN_CALIBRATION.maxWaitMs)result={issue:'The sink did not finish emptying within 10 minutes. Check the tap is off and the drain is open, then repeat this check.'};
  if(result.waiting)issue('Waiting for the sink to finish draining',409,'drainage_pending');
  let next={...current,active_capture:null,last_issue:result.issue??null};

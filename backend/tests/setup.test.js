@@ -43,6 +43,22 @@ test('setup requires three distinct and steady readings from a fresh batch witho
  assert.equal(computedView(record([sample('old',0,-6000)])).setup_signal,'checking');
  assert.equal(computedView(record([sample('old',0,-13000)])).setup_signal,'stale');
 });
+test('empty calibration explains timeouts and recovers in the same recording',()=>{
+ const bad=Array.from({length:5},(_,i)=>point(`bad-${i}`,0,-2000+i*500,true));
+ assert.match(learnCalibration(bad).message,/online.*not returning a distance/);
+ const good=Array.from({length:20},(_,i)=>point(`good-${i}`,0,500+i*500));
+ assert.deepEqual(learnCalibration([...bad,...good]).calibration,{empty_distance_mm:300});
+ const later=bad.map((p,i)=>({...p,timestamp:new Date(now+11000+i*500).toISOString()}));
+ assert.equal(learnCalibration([...good,...later]).progress,0);
+});
+test('clean stable baselines save after six seconds while noisy baselines need a longer window',()=>{
+ const clean=Array.from({length:13},(_,i)=>point(`clean-${i}`,i%2,-6000+i*500));
+ assert.equal(learnCalibration(clean.slice(0,12)).calibration,null);
+ assert.deepEqual(learnCalibration(clean).calibration,{empty_distance_mm:300});
+ const noisy=Array.from({length:20},(_,i)=>point(`noisy-${i}`,i%2?4:0,-9500+i*500));
+ assert.equal(learnCalibration(noisy.slice(0,13)).calibration,null);
+ assert.deepEqual(learnCalibration(noisy).calibration,{empty_distance_mm:298});
+});
 test('running water cannot substitute for the empty-basin reference',()=>{
  const filling=Array.from({length:20},(_,i)=>point(String(i),i*3,-10000+i*500));
  assert.equal(learnCalibration(filling).calibration,null);

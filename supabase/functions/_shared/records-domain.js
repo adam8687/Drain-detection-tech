@@ -50,6 +50,8 @@ export function depths(point, calibration) {
 // real outage longer than maxGap restarts the window), a few stray echoes are ignored, and stability is judged on the
 // middle 80% of readings. A moving mount, filling water or an unreliable sensor still fail.
 export const CALIBRATION_NOISE = Object.freeze({ trim: 0.1, maxSpreadMm: 10, echoMm: 15, maxEchoShare: 0.1, maxFailedShare: 0.25 });
+const QUICK_EMPTY_CHECK = { samples: 13, spanMs: 6000, spreadMm: 2 };
+
 export function learnCalibration(points) {
   const window = [], failed = [];
   for (const point of ordered(points)) {
@@ -61,17 +63,33 @@ export function learnCalibration(points) {
   while (window.length > 20 && Date.parse(window.at(-1).timestamp) - Date.parse(window[1].timestamp) >= 8000) window.shift();
   const first = window.length ? Date.parse(window[0].timestamp) : 0, last = window.length ? Date.parse(window.at(-1).timestamp) : 0;
   const span = last - first;
-  const progress = Math.min(1, window.length / 20, span / 8000);
-  const values = window.map(p => p.sensor.distance_mm).sort((a,b)=>a-b);
+  const quick = window.slice(-QUICK_EMPTY_CHECK.samples);
+  const quickStart = quick.length ? Date.parse(quick[0].timestamp) : 0;
+  const quickDistances = quick.map(point => point.sensor.distance_mm);
+  const quickSpan = last - quickStart;
+  const windowDistances = window.map(point => point.sensor.distance_mm);
+  const cleanQuickCheck = quick.length > 0 && !failed.some(time=>time>=first) &&
+    Math.max(...windowDistances) - Math.min(...windowDistances) <= QUICK_EMPTY_CHECK.spreadMm;
+  if (cleanQuickCheck && quick.length === QUICK_EMPTY_CHECK.samples && quickSpan >= QUICK_EMPTY_CHECK.spanMs) {
+    quickDistances.sort((a,b)=>a-b);
+    return {progress:1,calibration:{empty_distance_mm:quickDistances[Math.floor(quickDistances.length/2)]},message:'Empty-sink reference saved.'};
+  }
+  const progress = cleanQuickCheck
+    ? Math.max(Math.min(1, window.length / 20, span / 8000), Math.min(1, quick.length / QUICK_EMPTY_CHECK.samples, quickSpan / QUICK_EMPTY_CHECK.spanMs))
+    : Math.min(1, window.length / 20, span / 8000);
+  const values = windowDistances.sort((a,b)=>a-b);
   const unstable = { progress:0, calibration:null, message:'Keep the sink empty and the sensor mount still.' };
-  if (!values.length) return unstable;
+  if (!values.length) return failed.length
+    ? {progress:0,calibration:null,message:'The unit is online, but the sensor is not returning a distance. Check its wiring and aim it at the empty basin.'}
+    : {progress:0,calibration:null,message:'Waiting for the first sensor reading.'};
+  if (failed.filter(t=>t>last).length >= 3) return {progress:0,calibration:null,message:'The sensor stopped returning distances. Check its wiring and position. This check will resume when readings return.'};
   const median = (values[Math.floor(values.length/2)] + values[Math.floor((values.length-1)/2)]) / 2;
   const cut = Math.floor(values.length * CALIBRATION_NOISE.trim), core = values.slice(cut, values.length - cut);
   const echoes = values.filter(v => Math.abs(v - median) > CALIBRATION_NOISE.echoMm).length;
   const lost = failed.filter(t => t >= first && t <= last).length;
   if (core.at(-1) - core[0] > CALIBRATION_NOISE.maxSpreadMm || echoes > values.length * CALIBRATION_NOISE.maxEchoShare) return unstable;
   if (lost > (values.length + lost) * CALIBRATION_NOISE.maxFailedShare) return { progress:0, calibration:null, message:'The sensor is missing too many readings. Check its wiring and that nothing blocks it.' };
-  return {progress,calibration:progress===1?{empty_distance_mm:Math.round(median*10)/10}:null,message:`${window.length} stable readings; ${(span/1000).toFixed(1)} seconds (minimum 20 readings over 8 seconds).`};
+  return {progress,calibration:progress===1?{empty_distance_mm:Math.round(median*10)/10}:null,message:`${window.length} steady readings over ${(span/1000).toFixed(1)} seconds. Keep the sink empty and still.`};
 }
 export function analyzeDrainage(points, calibration) {
   if (!calibration) return { result: { drainage_time_seconds: null, outcome: 'uncertain' }, message: 'No calibration is available.' };
@@ -444,7 +462,7 @@ export function computedView(record, sample = null, seriesStart = 0) {
   if (stale && sample === null && timeline.length) timeline.at(-1).seconds_remaining = null;
   const learning = record.record_type === 'calibration' ? learnCalibration(visible) : null;
   const latest = visible.at(-1);
-  const sensor_connection = !latest ? 'waiting' : latest.sensor.status !== 'ok' ? 'problem' : record.recording_status === 'recording' && (now - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > now) ? 'stale' : 'connected';
+  const sensor_connection = !latest ? 'waiting' : record.recording_status === 'recording' && (now - Date.parse(latest.timestamp) > SETTINGS.fresh || Date.parse(latest.timestamp) > now) ? 'stale' : latest.sensor.status !== 'ok' ? 'problem' : 'connected';
   return { drain_cycles: drainCycleSummaries(record), monitoring_limits: { slow_seconds: STATUS_SETTINGS.initialSlowSeconds, standing_water_seconds: STATUS_SETTINGS.initialTimeoutSeconds }, sensor_connection, setup_signal: setupSignal(visible, now), setup_guidance: waterSetupGuidance(visible, record.calibration, now), forecast: result, timeline, water_levels, sample_index: Math.max(0, position), sample_count: rows.length, first_measurement_at: first ?? null, elapsed_seconds: visible.length ? (Date.parse(visible.at(-1).timestamp) - Date.parse(first)) / 1000 : 0, stale, calibration_progress: learning?.progress ?? null, calibration_message: learning?.message ?? null };
 }
 // Applies points in order inside one atomic update. Points arriving after the

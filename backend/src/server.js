@@ -61,7 +61,13 @@ export function createApp(config, store = createRecordStore(config), {
     if (!membership) throw new ApiError(404, 'fixture_not_found', 'Fixture not found');
     if (write && membership.role !== 'owner') throw new ApiError(403, 'forbidden', 'Only the fixture owner can change it');
   };
-  const get = async id => { const row = await store.get(uuid(id, 'record_id')); if (!row) throw new ApiError(404, 'record_not_found', 'Recording not found'); return row; };
+  const get = async (id, recoverOrphanedBatch = false) => {
+    const row = await store.get(uuid(id, 'record_id'));
+    if (row) return row;
+    // The Wi-Fi uploader archives this batch under the original ID and discovers the next recording.
+    if (recoverOrphanedBatch) throw new ApiError(409, 'record_finished', 'The original recording is gone. Discover the active recording.');
+    throw new ApiError(404, 'record_not_found', 'Recording not found');
+  };
   const mutate = async (id, transform) => {
     for (let attempt = 0; attempt < 12; attempt++) {
       const previous = await get(id), response = transform(previous);
@@ -102,6 +108,13 @@ export function createApp(config, store = createRecordStore(config), {
         if(!who.admin&&!who.emailWorker)throw new ApiError(403,'forbidden','Worker access required');return json(200,await notifications.flush());
       }
       const emailSettings=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/notifications$/);
+      const setupRoute = path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/setup$/);
+      if (setupRoute && req.method === 'GET') {
+        const fixture = deviceId(setupRoute[1]);
+        await requireAccess(who, fixture, true);
+        const keys = await accessStore.list('device_keys', { device_id: fixture });
+        return json(200, { provisioned: keys.some(key => key.kind !== 'viewer' && !key.revoked_at) });
+      }
       const liveRoute=path.match(/^\/api\/v1\/devices\/([a-zA-Z0-9_-]+)\/live-mode$/);
       if(liveRoute&&['GET','POST'].includes(req.method)){
         const fixture=deviceId(liveRoute[1]);await requireAccess(who,fixture,true);
@@ -207,7 +220,8 @@ export function createApp(config, store = createRecordStore(config), {
           return json(200,{record_id:id,calibration:result.record.calibration});
         }
         if (action === 'measurements' && req.method === 'POST') {
-          const current = await get(id);
+          const recoverOrphanedBatch = Boolean(who.deviceId && req.headers['x-drain-live-capability'] === '1');
+          const current = await get(id, recoverOrphanedBatch);
           await requireAccess(who, current.fixture_id, false, true);
           if (who.deviceId && current.data_source !== 'sensor') throw new ApiError(403, 'forbidden', 'Sensor keys cannot append simulation data');
           const points = validateMeasurements(await body(req));
