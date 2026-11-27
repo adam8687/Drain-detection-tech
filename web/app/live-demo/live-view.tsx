@@ -50,7 +50,7 @@ function ReadingUpdates({ recording, fast, enabled, expired, status, recent, dep
     if (!enabled) { setProgress(null); return; }
     const arrivedAt = Date.now();
     setProgress(previous => {
-      if (!previous) return previous;
+      if (!previous) return { latestTimestamp: sampleTime, lastArrival: arrivedAt, hasNewReading: false, confirmed: fast };
       const advanced = sampleTime !== null && (previous.latestTimestamp === null || sampleTime > previous.latestTimestamp);
       const justConfirmed = fast && !previous.confirmed;
       if (!advanced && !justConfirmed) return previous;
@@ -96,7 +96,7 @@ function ReadingUpdates({ recording, fast, enabled, expired, status, recent, dep
       {recording && age && ` · ${age}`}
       {depth !== null && ` · Water level ${Math.round(depth)} mm`}
     </p>}
-    <p className={styles.caption}>Live updates run for up to five minutes while this page is visible. Turn them on again when you need them.</p>
+    <p className={styles.caption}>Live updates start automatically for an active recording and run for up to five minutes. You can turn them back on here.</p>
   </section>;
 }
 
@@ -107,9 +107,11 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
   const view = data.view;
   const fixtureName = data.fixtures.find(f => f.id === data.fixture)?.name || 'Live view';
   const recent = view?.record.measurements.at(-1);
+  const calibrating = view?.record.record_type === 'calibration';
+  const emptyReference = calibrating ? view.record.calibration?.empty_distance_mm : undefined;
   const levels = view?.computed.water_levels ?? [];
   const rawReadings = view?.record.measurements ?? [];
-  const hasLevels = levels.some(p => p.depth_mm !== null);
+  const hasLevels = !calibrating && levels.some(p => p.depth_mm !== null);
   const hasDistances = rawReadings.some(r => r.sensor.status === 'ok' && r.sensor.distance_mm !== null);
   const hasChart = hasLevels || hasDistances;
   const distance = recent?.sensor.status === 'ok' ? recent.sensor.distance_mm : null;
@@ -122,7 +124,6 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
   const baseline = drainStatus?.baseline_seconds;
   const drainLabel=drainStatus?.status==='in_progress'&&drainStatus.elapsed_seconds===null?'Monitoring':drainStatus?statusLabels[drainStatus.status]:'';
   const status = data.error ? 'Connection interrupted' : !view ? 'No recording' : active && view.computed.stale ? 'Waiting for data' : drainStatus ? drainLabel : active ? 'Recording' : view.record.result?.outcome || 'Saved recording';
-  const calibrating = view?.record.record_type === 'calibration';
   const needsCalibration = view?.record.record_type === 'monitoring' && !view.record.calibration;
   const fixtureMatches = data.fixtures.filter(f => `${f.name} ${f.id}`.toLowerCase().includes(query.toLowerCase()));
 
@@ -151,7 +152,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
       <p className={styles.loading} role="status" aria-live="polite">{data.loading ? 'Loading recordings…' : !data.error && !view ? data.fixture ? 'No recordings for this unit yet. Use guided drain setup below to begin.' : 'No units or recordings yet. Add a unit to begin.' : ''}</p>
 
       {data.fixture && <a className={styles.back} href={`/add-unit?fixture=${encodeURIComponent(data.fixture)}`}>Guided drain setup →</a>}
-      {data.fixture && data.source === 'sensor' && <ReadingUpdates key={data.fixture} recording={active} fast={data.live.active} enabled={data.demo} expired={data.demoExpired} status={data.live.message} recent={recent} depth={levels.at(-1)?.depth_mm ?? null} unavailable={Boolean(data.error)} onToggle={data.setDemo}/>}
+      {data.fixture && data.source === 'sensor' && <ReadingUpdates key={data.fixture} recording={active} fast={data.live.active} enabled={data.demo} expired={data.demoExpired} status={data.live.message} recent={recent} depth={hasLevels ? reading ?? null : null} unavailable={Boolean(data.error)} onToggle={data.setDemo}/>}
       {drainStatus && (active || drainStatus.status==='unknown' || drainStatus.status==='learning') && <div className={styles.connection} role={drainStatus.status === 'running_too_long' ? 'alert' : 'status'}><strong>{drainLabel}</strong><p>{drainStatus.message}</p><p>Slow threshold: {drainStatus.slow_threshold_seconds?.toFixed(1)} s · Water-still-present limit: {drainStatus.timeout_threshold_seconds?.toFixed(1)} s</p><a href={`/alerts?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}`}>View alerts →</a></div>}
       <div className={styles.columns} aria-busy={data.loading}>
         <div className={styles.leftColumn}>
@@ -162,7 +163,11 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
               {view.record.continued_from && view.record.continued_in && ' · '}
               {view.record.continued_in && <a href={`/live-demo?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}&record=${view.record.continued_in}`}>Next recording window</a>}
             </nav>}
-            {(hasChart || duration != null) && <dl className={styles.recordingMetrics}>
+            {(hasChart || emptyReference != null || duration != null) && <dl className={styles.recordingMetrics}>
+              {emptyReference != null && <div>
+                <dt>Saved empty-sink distance</dt>
+                <dd><strong>{emptyReference.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> <span>mm</span></dd>
+              </div>}
               {hasChart && <div>
                 <dt>{hasLevels ? 'Latest water level' : 'Latest sensor distance'}</dt>
                 <dd>{reading != null ? <><strong>{reading.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> <span>mm</span></> : 'No clear reading'}</dd>
@@ -173,7 +178,7 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
                 {baseline != null && <dd className={styles.caption}>Usual drain time {baseline.toFixed(1)} s</dd>}
               </div>}
             </dl>}
-            {hasLevels ? <WaterLevelChart points={levels} /> : hasDistances ? <RawDistanceChart readings={rawReadings} startAt={view?.computed.first_measurement_at} /> : <p className={styles.recordingEmpty}>
+            {hasLevels ? <WaterLevelChart points={levels} /> : hasDistances ? <RawDistanceChart readings={rawReadings} startAt={view?.computed.first_measurement_at} title={calibrating ? 'Measured distance to the empty sink' : undefined} /> : <p className={styles.recordingEmpty}>
               {data.loading ? 'Loading measurements…' : active ? recent ? 'The sensor is responding, but hasn’t returned a clear distance yet.' : 'Waiting for the first sensor reading.' : 'No sensor readings to show.'}
             </p>}
             {calibrating && view.computed.calibration_message && <p className={styles.measurementNote}>{view.computed.calibration_message}</p>}

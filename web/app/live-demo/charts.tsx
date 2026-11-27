@@ -33,10 +33,10 @@ function SensorPlot({ points, title, unit, labels }: { points: Point[]; title: s
         <div className={styles.plotCanvas}>
           <svg viewBox="0 0 364 200" preserveAspectRatio="none" role="img" aria-label={`${title}, ${unit} on the vertical axis. Long pauses are compressed and marked; lines stop at missing data.`}>
             {[0, 1, 2, 3, 4].map(i => <line key={i} x1="4" x2="356" y1={190 - i * 45} y2={190 - i * 45} stroke="#a8d3f0" strokeWidth=".7" />)}
-            {gaps.map(p => <g key={p.index}><title>No readings for {seconds(p.missingSeconds)}; pause compressed</title><line x1={(x(p.index - 1) + x(p.index)) / 2} x2={(x(p.index - 1) + x(p.index)) / 2} y1="8" y2="190" stroke="#3f6ea6" strokeDasharray="3 4" /><text x={(x(p.index - 1) + x(p.index)) / 2} y="9" textAnchor="middle">//</text></g>)}
+            {gaps.map(p => <g key={p.index}><title>{`No readings for ${seconds(p.missingSeconds)}; pause compressed`}</title><line x1={(x(p.index - 1) + x(p.index)) / 2} x2={(x(p.index - 1) + x(p.index)) / 2} y1="8" y2="190" stroke="#3f6ea6" strokeDasharray="3 4" /><text x={(x(p.index - 1) + x(p.index)) / 2} y="9" textAnchor="middle">//</text></g>)}
             {(['a', 'b'] as const).slice(0, labels.length).map((key, sensor) => <g key={key}>
               <path d={path(key)} fill="none" stroke={sensor ? '#6baae0' : '#2563ae'} strokeWidth="2.5" strokeDasharray={sensor ? '6 4' : undefined} vectorEffect="non-scaling-stroke" />
-              {visible.map((p, i) => p[key] == null ? null : <circle key={i} cx={x(i)} cy={y(p[key]!)} r="2.5" fill={sensor ? '#6baae0' : '#2563ae'}><title>{labels[sensor]}: {p[key]!.toFixed(1)} {unit} · elapsed {seconds(p.time)}</title></circle>)}
+              {visible.map((p, i) => p[key] == null ? null : <circle key={i} cx={x(i)} cy={y(p[key]!)} r="2.5" fill={sensor ? '#6baae0' : '#2563ae'}><title>{`${labels[sensor]}: ${p[key]!.toFixed(1)} ${unit} · elapsed ${seconds(p.time)}`}</title></circle>)}
             </g>)}
           </svg>
           <div className={styles.timeTicks} aria-hidden="true">{ticks.map(i => <span key={i} style={{ left: `${timeline[i].position / maxX * 100}%` }}>{seconds(timeline[i].time)}</span>)}</div>
@@ -53,9 +53,9 @@ export function WaterLevelChart({ points }: { points: WaterLevelPoint[] }) {
   return <SensorPlot title="Measured water level" unit="mm" labels={['Sensor']} points={points.map(p => ({ time: p.elapsed_seconds, a: p.depth_mm, gap: p.gap_before }))} />;
 }
 
-export function RawDistanceChart({ readings, startAt }: { readings: Measurement[]; startAt?:string|null }) {
+export function RawDistanceChart({ readings, startAt, title = 'Measured distance (uncalibrated)' }: { readings: Measurement[]; startAt?: string | null; title?: string }) {
   const start = Date.parse(startAt ?? readings[0]?.timestamp ?? '');
-  return <SensorPlot title="Measured distance (uncalibrated)" unit="mm" labels={['Sensor']} points={readings.map(p => ({ time: (Date.parse(p.timestamp) - start) / 1000, a: p.sensor.status === 'ok' ? p.sensor.distance_mm : null }))} />;
+  return <SensorPlot title={title} unit="mm" labels={['Sensor']} points={readings.map(p => ({ time: (Date.parse(p.timestamp) - start) / 1000, a: p.sensor.status === 'ok' ? p.sensor.distance_mm : null }))} />;
 }
 
 export function DrainForecastChart({ view }: { view: RecordView | null }) {

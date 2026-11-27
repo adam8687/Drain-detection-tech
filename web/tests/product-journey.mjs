@@ -170,9 +170,9 @@ async function journey(profile,index){
   });
   const updates = page.getByRole('region', { name: 'Reading updates' });
   const liveSwitch = updates.getByRole('switch', { name: 'Live updates' });
-  await check('live view waits for device confirmation and displays the latest reading', async () => {
-    await liveSwitch.check();
+  await check('live view turns on fast updates automatically and waits for device confirmation', async () => {
     await updates.getByText('Starting fast updates.', { exact: false }).waitFor();
+    assert.equal(await liveSwitch.isChecked(), true);
     const point = sample(Date.now() + 1);
     await append([sample(Date.now()), point]);
     await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
@@ -294,6 +294,19 @@ async function journey(profile,index){
   await page.getByRole('link',{name:'View recording →',exact:true}).first().click();await page.waitForURL('**/live-demo?**');
   await page.getByRole('heading',{name:'Email alerts',exact:true}).waitFor();
   await layout('alert-recording');
+  await check('saved calibration shows measured distances and the empty-sink reference', async () => {
+    const records = await app.store.list({ fixture_id: fixture }, 100);
+    const calibration = records.find(record => record.record_type === 'calibration' && record.calibration);
+    assert.ok(calibration);
+    await page.goto(`${origin}/live-demo?fixture=${fixture}&record=${calibration.record_id}`);
+    const card = page.getByRole('region', { name: 'Calibration recording' });
+    await card.getByText('Saved empty-sink distance', { exact: true }).waitFor();
+    assert.equal(await card.getByText('300 mm', { exact: true }).count(), 2);
+    await card.getByRole('img', { name: /^Measured distance to the empty sink/ }).waitFor();
+    assert.ok(await card.locator('svg circle').count() > 0);
+    assert.equal(await card.getByText('Latest water level', { exact: true }).count(), 0);
+    assert.equal(await page.getByRole('switch', { name: 'Live updates' }).isChecked(), false);
+  });
   await page.goto(`${origin}/add-unit?fixture=${fixture}`);await check('completed setup resumes without retraining',()=>page.getByRole('heading',{name:`${fixture} is ready`}).waitFor());
   await check('dashboard fetches compact fleet summaries without loading raw recordings',async()=>{
     const calls=new Set();const observe=req=>{const path=new URL(req.url()).pathname;if(path.startsWith('/api/backend/'))calls.add(path);};

@@ -21,7 +21,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   const [loading, setLoading] = useState(true);
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [demoState, setDemoState] = useState<'off' | 'running' | 'expired'>('off');
+  const [demoState, setDemoState] = useState<'auto' | 'off' | 'running' | 'expired'>('auto');
   const demo = demoState === 'running';
   const cachedView = useRef<{ api: DrainApi; view: RecordView } | null>(null);
 
@@ -61,8 +61,14 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   const fixture = fixtures.some(f => f.id === fixtureChoice) ? fixtureChoice : records[0]?.fixture_id || fixtures[0]?.id || '';
   const fixtureRecords = useMemo(() => records.filter(r => r.fixture_id === fixture), [records, fixture]);
   const recordId = fixture ? recordChoice || selectDeviceRecord(fixtureRecords) : '';
+  const currentView = view?.record.record_id === recordId ? view : null;
+  const isLiveSensorRecording = source === 'sensor' && currentView?.record.fixture_id === fixture
+    && currentView.record.data_source === source && currentView.record.recording_status === 'recording';
   const live=useLiveMode(api,fixture,demo&&source==='sensor'&&Boolean(recordId),'demo');
-  useEffect(() => setDemoState('off'), [fixture, source]);
+  useEffect(() => setDemoState('auto'), [fixture, source]);
+  useEffect(() => {
+    if (isLiveSensorRecording) setDemoState(state => state === 'auto' ? 'running' : state);
+  }, [isLiveSensorRecording, recordId]);
   useEffect(() => {
     if (!demo) return;
     const timer = setTimeout(() => setDemoState('expired'), LIVE_DEMO_DURATION_MS);
@@ -100,7 +106,7 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
           timer=setTimeout(() => void load(), demo?liveDelay:idle?15000:3000);
         } else {
           if(wasRecording&&next.record.continued_in){setRecordChoice(next.record.continued_in);}
-          else setDemoState('off');
+          else setDemoState(state => state === 'running' ? 'off' : state);
         }
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -119,7 +125,10 @@ export function useLiveRecording(initialFixture = '', initialRecord = '', initia
   }, [api, recordId, fixture, source, refresh, demo]);
 
   return { source, setSource: (value: DataSource) => { setRecordChoice(''); setSource(value); }, fixtures, fixture, setFixture: (id: string) => { setFixtureChoice(id); setRecordChoice(''); },
-    records: fixtureRecords, recordId, setRecordId: (id: string) => { setDemoState('off'); setRecordChoice(id); },
-    view: view?.record.record_id === recordId ? view : null, error, needsAuth, demo, demoExpired: demoState === 'expired', setDemo: (enabled: boolean) => setDemoState(enabled ? 'running' : 'off'), live,
+    records: fixtureRecords, recordId, setRecordId: (id: string) => {
+      if (id !== recordId) setDemoState('auto');
+      setRecordChoice(id);
+    },
+    view: currentView, error, needsAuth, demo, demoExpired: demoState === 'expired', setDemo: (enabled: boolean) => setDemoState(enabled ? 'running' : 'off'), live,
     loading: loading || loadingRecord, refresh: () => setRefresh(n => n + 1) };
 }

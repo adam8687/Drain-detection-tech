@@ -18,10 +18,10 @@ export function useLiveMode(api:DrainApi,fixture:string,enabled:boolean,reason:'
  },[active,enabled,fixture]);
  useEffect(()=>{
   setState(null);setError('');if(!fixture||!enabled)return;
-  const id=crypto.randomUUID(),controller=new AbortController();let timer:ReturnType<typeof setTimeout>,staleTimer:ReturnType<typeof setTimeout>,retired=false,working=false,renewed=0;
+  const id=crypto.randomUUID(),controller=new AbortController();let timer:ReturnType<typeof setTimeout>,staleTimer:ReturnType<typeof setTimeout>,retired=false,working=false,denied=false,renewed=0;
   const release=()=>{void api.releaseLiveMode(fixture,id,reason).catch(()=>{});};
   const tick=async()=>{
-   if(retired||working)return;
+   if(retired||working||denied)return;
    if(document.hidden){setState(null);return;}
    working=true;
    let pollDelay=1000;
@@ -32,8 +32,8 @@ export function useLiveMode(api:DrainApi,fixture:string,enabled:boolean,reason:'
     if(retired||document.hidden){release();return;}
     if(next.active)pollDelay=2000;
     setState({fixture,value:next});setError('');clearTimeout(staleTimer);staleTimer=setTimeout(()=>{if(!retired)setState(null);},4000);
-   }catch(e){if(!retired){setState(null);setError(e instanceof DrainApiError&&e.status===403?'Only the unit owner can start live mode.':'Live mode could not connect. Keep the unit powered on and try again.');}}
-   finally{working=false;if(!retired)timer=setTimeout(()=>void tick(),pollDelay);}
+   }catch(e){if(!retired){denied=e instanceof DrainApiError&&e.status===403;setState(null);setError(denied?'Only the unit owner can start live mode.':'Live mode could not connect. Keep the unit powered on and try again.');}}
+   finally{working=false;if(!retired&&!denied)timer=setTimeout(()=>void tick(),pollDelay);}
   };
   const visibility=()=>{clearTimeout(timer);if(document.hidden){renewed=0;setState(null);release();}else void tick();};
   const leave=()=>{renewed=0;release();};
