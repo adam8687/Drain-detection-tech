@@ -155,7 +155,27 @@ async function journey(profile,index){
   await check('failed setup restore blocks actions and recovers',()=>page.getByRole('button',{name:'Start monitoring',exact:true}).waitFor());
   await page.getByRole('heading',{name:`${fixture} is ready`}).waitFor();await page.getByText('The empty-sink reference and both drainage checks are saved.',{exact:true}).waitFor();await layout('ready');
   await page.screenshot({path:`${output}/${profile.name}-calibration-ready.png`,fullPage:true});
-  await page.getByRole('button',{name:'Start monitoring',exact:true}).click();await page.waitForURL('**/live-demo?**');await page.getByText('Empty reference saved. Watching for water.',{exact:true}).first().waitFor();await layout('live-monitoring');
+  await check('live view can start monitoring from a saved calibration', async () => {
+    const finished = await fetch(`${backend}/api/v1/records/${observation.record_id}/finish`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(finished.status, 200);
+    const records = await app.store.list({ fixture_id: fixture }, 100);
+    const calibration = records.find(record => record.record_type === 'calibration' && record.calibration);
+    assert.ok(calibration);
+    await page.goto(`${origin}/live-demo?fixture=${fixture}&record=${calibration.record_id}`);
+    const updates = page.getByRole('region', { name: 'Reading updates' });
+    const start = updates.getByRole('button', { name: 'Start live monitoring', exact: true });
+    await start.waitFor();
+    assert.equal(await updates.getByRole('switch').count(), 0);
+    await start.click();
+    const monitoring = await active('monitoring');
+    await page.waitForURL(url => url.searchParams.get('record') === monitoring.record_id);
+    await updates.getByRole('switch', { name: 'Live updates' }).waitFor();
+    await page.getByText('Empty reference saved. Watching for water.', { exact: true }).first().waitFor();
+  });
+  await layout('live-monitoring');
   const recordingCard=page.getByRole('region',{name:'Monitoring recording'});
   await check('empty monitoring card explains that it is waiting for readings',async()=>{
     await recordingCard.getByText('Waiting for the first sensor reading.',{exact:true}).waitFor();
@@ -305,7 +325,12 @@ async function journey(profile,index){
     await card.getByRole('img', { name: /^Measured distance to the empty sink/ }).waitFor();
     assert.ok(await card.locator('svg circle').count() > 0);
     assert.equal(await card.getByText('Latest water level', { exact: true }).count(), 0);
-    assert.equal(await page.getByRole('switch', { name: 'Live updates' }).isChecked(), false);
+    const updates = page.getByRole('region', { name: 'Reading updates' });
+    assert.equal(await updates.getByRole('switch').count(), 0);
+    const openLive = updates.getByRole('link', { name: 'Open live recording', exact: true });
+    await openLive.click();
+    await page.getByRole('region', { name: 'Monitoring recording' }).waitFor();
+    await updates.getByRole('switch', { name: 'Live updates' }).waitFor();
   });
   await page.goto(`${origin}/add-unit?fixture=${fixture}`);await check('completed setup resumes without retraining',()=>page.getByRole('heading',{name:`${fixture} is ready`}).waitFor());
   await check('dashboard fetches compact fleet summaries without loading raw recordings',async()=>{

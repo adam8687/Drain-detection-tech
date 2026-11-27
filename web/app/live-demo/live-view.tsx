@@ -24,15 +24,14 @@ type ReadingProgress = {
   confirmed: boolean;
 };
 
-function ReadingUpdates({ recording, fast, enabled, expired, status, recent, depth, unavailable, onToggle }: {
-  recording: boolean; fast: boolean; enabled: boolean; expired: boolean; status: string; recent?: Measurement;
+function ReadingUpdates({ fast, enabled, expired, status, recent, depth, unavailable, onToggle }: {
+  fast: boolean; enabled: boolean; expired: boolean; status: string; recent?: Measurement;
   depth: number | null; unavailable: boolean; onToggle: (enabled: boolean) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const sampleTime = recent ? Date.parse(recent.timestamp) : null;
   useEffect(() => {
-    if (!recording && !enabled) return;
     const update = () => { if (!document.hidden) setNow(Date.now()); };
     const resume = () => {
       if (document.hidden) return;
@@ -44,7 +43,7 @@ function ReadingUpdates({ recording, fast, enabled, expired, status, recent, dep
     const timer = setInterval(update, 500);
     document.addEventListener('visibilitychange', resume);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', resume); };
-  }, [recording, enabled]);
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) { setProgress(null); return; }
@@ -75,8 +74,7 @@ function ReadingUpdates({ recording, fast, enabled, expired, status, recent, dep
   const age = ageSeconds === null ? '' : ageSeconds === 0 ? 'less than 1 second ago'
     : ageSeconds === 1 ? '1 second ago' : ageSeconds >= 60 ? 'over a minute ago' : `${ageSeconds} seconds ago`;
   let message = 'Monitoring updates arrive in groups. When the sink is idle, a change can take around 20 seconds to appear.';
-  if (!recording && !enabled) message = recent ? 'Viewing a saved recording.' : 'Select an active recording to watch for updates.';
-  else if (unavailable) message = 'Connection interrupted. Showing the last available readings.';
+  if (unavailable) message = 'Connection interrupted. Showing the last available readings.';
   else if (expired) message = 'Live updates ended. Normal monitoring has resumed.';
   else if (enabled) {
     if (!progress?.confirmed) message = status;
@@ -89,11 +87,11 @@ function ReadingUpdates({ recording, fast, enabled, expired, status, recent, dep
   }
 
   return <section className={styles.card} aria-label="Reading updates">
-    <label><input type="checkbox" role="switch" aria-label="Live updates" checked={enabled} disabled={!recording && !enabled} onChange={event => toggle(event.target.checked)}/> Live updates</label>
+    <label><input type="checkbox" role="switch" aria-label="Live updates" checked={enabled} onChange={event => toggle(event.target.checked)}/> Live updates</label>
     <p role="status">{message}</p>
     {recent && <p className={styles.caption}>
       Last reading at <time dateTime={recent.timestamp}>{readingTime(recent.timestamp)}</time>
-      {recording && age && ` · ${age}`}
+      {age && ` · ${age}`}
       {depth !== null && ` · Water level ${Math.round(depth)} mm`}
     </p>}
     <p className={styles.caption}>Live updates start automatically for an active recording and run for up to five minutes. You can turn them back on here.</p>
@@ -152,7 +150,18 @@ export default function LiveView({ initialFixture = '', initialRecord = '', init
       <p className={styles.loading} role="status" aria-live="polite">{data.loading ? 'Loading recordings…' : !data.error && !view ? data.fixture ? 'No recordings for this unit yet. Use guided drain setup below to begin.' : 'No units or recordings yet. Add a unit to begin.' : ''}</p>
 
       {data.fixture && <a className={styles.back} href={`/add-unit?fixture=${encodeURIComponent(data.fixture)}`}>Guided drain setup →</a>}
-      {data.fixture && data.source === 'sensor' && <ReadingUpdates key={data.fixture} recording={active} fast={data.live.active} enabled={data.demo} expired={data.demoExpired} status={data.live.message} recent={recent} depth={hasLevels ? reading ?? null : null} unavailable={Boolean(data.error)} onToggle={data.setDemo}/>}
+      {data.fixture && data.source === 'sensor' && (active
+        ? <ReadingUpdates key={data.fixture} fast={data.live.active} enabled={data.demo} expired={data.demoExpired} status={data.live.message} recent={recent} depth={hasLevels ? reading ?? null : null} unavailable={Boolean(data.error)} onToggle={data.setDemo}/>
+        : !data.loading && !data.error && <section className={styles.card} aria-label="Reading updates">
+          <h2>Live updates</h2>
+          <p>{view ? 'You’re viewing a saved recording.' : 'No recording is selected.'} Open a live recording to watch the graph update.</p>
+          {data.activeRecordingUrl
+            ? <a className={styles.primary} href={data.activeRecordingUrl}>Open live recording</a>
+            : <button type="button" className={styles.primary} disabled={data.startingMonitoring} onClick={() => void data.startMonitoring()}>
+              {data.startingMonitoring ? 'Starting monitoring…' : 'Start live monitoring'}
+            </button>}
+          {data.startError && <p role="alert">{data.startError}</p>}
+        </section>)}
       {drainStatus && (active || drainStatus.status==='unknown' || drainStatus.status==='learning') && <div className={styles.connection} role={drainStatus.status === 'running_too_long' ? 'alert' : 'status'}><strong>{drainLabel}</strong><p>{drainStatus.message}</p><p>Slow threshold: {drainStatus.slow_threshold_seconds?.toFixed(1)} s · Water-still-present limit: {drainStatus.timeout_threshold_seconds?.toFixed(1)} s</p><a href={`/alerts?fixture=${encodeURIComponent(data.fixture)}&source=${data.source}`}>View alerts →</a></div>}
       <div className={styles.columns} aria-busy={data.loading}>
         <div className={styles.leftColumn}>
