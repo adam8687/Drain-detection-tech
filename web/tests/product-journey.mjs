@@ -236,6 +236,24 @@ async function journey(profile,index){
     await updates.getByText('Live readings are arriving.', { exact: true }).waitFor();
   });
 
+  await check('a valid echo outside the empty reference still updates the distance chart', async () => {
+    const point = sample(Date.now(), -400);
+    await append([point]);
+    await updates.locator(`time[datetime="${point.timestamp}"]`).waitFor();
+    await updates.getByText('Sensor distance 700 mm', { exact: false }).waitFor();
+    await recordingCard.getByRole('img', { name: /^Measured sensor distance/ }).waitFor();
+    await recordingCard.getByText('700 mm', { exact: true }).waitFor();
+    await recordingCard.getByText('Showing sensor distance because', { exact: false }).waitFor();
+    const recovery = sample(Date.now(), 8);
+    await append([recovery]);
+    await recordingCard.getByRole('img', { name: /^Measured water level/ }).waitFor();
+    const showDistance = recordingCard.getByRole('button', { name: 'Show sensor distance', exact: true });
+    await showDistance.click();
+    await recordingCard.getByText('292 mm', { exact: true }).waitFor();
+    await recordingCard.getByRole('button', { name: 'Show water level', exact: true }).click();
+    await recordingCard.getByText('8 mm', { exact: true }).waitFor();
+  });
+
   await check('live refreshes count response time toward the polling interval', async () => {
     const current = await active('monitoring');
     const matchesRecord = url => url.pathname.endsWith(`/api/v1/records/${current.record_id}`);
